@@ -1,0 +1,22 @@
+# builtins 1
+
+mode builtins to separate module
+process this module first, to track builtin types by reference, not just by name
+coz with there may be user defined types with same name
+
+# functions
+
+every non pure method should contain ALL mutable variables in ScopeObject
+
+try UsageWalker from https://github.com/ajafff/tsutils/blob/master/util/usage.ts#L590
+
+# 2 pass module parsing
+
+1 pass) collect declarations
+analyze functions, (pure / not pure)
+
+-> IR (not llvm)
+
+2 pass) generate code
+
+IR -> llvm IR

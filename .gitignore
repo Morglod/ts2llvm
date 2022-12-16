@@ -1,0 +1,5 @@
+/node_modules
+/example/*.ll
+/example/*.out
+/example/*.s
+.DS_Store
