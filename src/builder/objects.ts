@@ -50,7 +50,11 @@ export function createObjectType(
 
     typeMeta.create = (ctx: ScopeContext) => {
         const mallocFunc = ctx.moduleCtx.mallocFunc;
-        const allocMem = ctx.builder.CreateCall(mallocFunc as llvm.Function, [ctx.const_int32(typeSize)]);
+        const allocMem = ctx.builder.CreateCall(
+            mallocFunc as llvm.Function,
+            [ctx.const_int32(typeSize)],
+            objectTypeName?.toString() || ""
+        );
         const allocObj = ctx.builder.CreateBitOrPointerCast(allocMem, tPtrType);
 
         // init obj
@@ -58,10 +62,14 @@ export function createObjectType(
         const refCounterFieldPtr = ctx.builder.CreateGEP(t, allocObj, [ctx.const_int32(0), ctx.const_int32(0)]);
         const typeIdPtr = ctx.builder.CreateGEP(t, allocObj, [ctx.const_int32(0), ctx.const_int32(1)]);
 
-        console.log(ctx.module.print());
+        // console.log(ctx.module.print());
 
+        console.error("qqq3.1");
         ctx.builder.CreateStore(ctx.const_int32(1), refCounterFieldPtr);
+        console.error("qqq3,3");
         ctx.builder.CreateStore(ctx.const_int32(typeId), typeIdPtr);
+
+        console.error("qqq3");
 
         // TODO: init fields by default value
 

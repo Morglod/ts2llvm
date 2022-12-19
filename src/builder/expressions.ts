@@ -47,6 +47,7 @@ export function codeBlock(
             ) {
                 const property = lhsExpression(ctx, node.expression.left)!;
                 const value = rhsExpression(ctx, node.expression.right);
+                console.log("qqqq3");
                 ctx.builder.CreateStore(value, property);
             }
         }

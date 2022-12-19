@@ -13,7 +13,7 @@ async function dojob(rootNames: string[], options: ts.CompilerOptions, host?: ts
     debugger;
 
     // await new Promise<void>((r) => {
-    //     setTimeout(() => r(), 10000);
+    //     setTimeout(() => r(), 4000);
     // });
 
     const program = ts.createProgram(rootNames, options, host);

@@ -167,7 +167,7 @@ export function callFunction(
         func = funcValue;
     } else {
         walkUp(ctx.tsNode!, (x) => {
-            const vc = getVarsContainer(x);
+            const vc = getVarsContainer(ctx, x);
             if (vc && vc instanceof ScopeObjectVarsContainer) {
                 scopeObject = vc.scopeObject;
                 return StopSymbol;
@@ -260,7 +260,10 @@ export function createFunctionObject(
     const { typeMeta } = found;
 
     const funcObj = typeMeta.create(ctx);
-    typeMeta.setField(ctx, funcObj, "funcPtr", func);
+
+    const funcPtr = ctx.builder.CreateBitOrPointerCast(func, ctx.builder.getInt8PtrTy());
+
+    typeMeta.setField(ctx, funcObj, "funcPtr", funcPtr);
     typeMeta.setField(ctx, funcObj, "scopeObjPtr", ctx.null_i8ptr());
     typeMeta.setField(ctx, funcObj, "thisObjPtr", ctx.null_i8ptr());
 

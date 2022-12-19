@@ -22,12 +22,6 @@ export function parseSourceFile(ctx: ProgramContext, node: ts.SourceFile) {
     createGcMarkRelease(moduleCtx);
     createFunctionObjectType(scopeCtx);
 
-    parseModuleContainers(node).forEach((c) => {
-        createVarsContainer(scopeCtx, c);
-    });
-
-    scopeCtx._vars = getVarsContainer(node);
-
     ts.forEachChild(node, (node) => {
         parseDeclaration(scopeCtx, node);
     });

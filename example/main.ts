@@ -25,19 +25,16 @@ function letsgo(pos: Pos2) {
 function entry() {
     const pos2: Pos2 = { x: 123, y: 10 };
 
-    // function boo(pos: Pos2) {
-    //     print_string("boo called");
-    //     letsgo({
-    //         x: pos2.x,
-    //         y: pos.y,
-    //     });
-    // }
-    // boo(pos2);
+    function boo(pos: Pos2) {
+        print_string("boo called");
+        letsgo(pos2);
+    }
 
     const pos: Pos2 = {
         x: 20,
         y: 40,
     };
+    boo(pos);
     const smth = {
         aaa: 123,
     };

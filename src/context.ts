@@ -53,7 +53,7 @@ export class ScopeContext {
         public readonly tsNode: ts.Node | undefined
     ) {
         if (tsNode && this.getTsContainerNode()) {
-            this._vars = getVarsContainer(this.getTsContainerNode()!);
+            this._vars = getVarsContainer(this, this.getTsContainerNode()!);
         }
     }
 

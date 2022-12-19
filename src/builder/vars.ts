@@ -47,6 +47,7 @@ export class DictVarsContainer implements IVarsContainer {
             this.vars[name] = { ...v, value: newValue };
             return;
         }
+        console.log("qqqq");
         ctx.builder.CreateStore(newValue, v.valuePtr);
     }
 }
@@ -91,53 +92,54 @@ export function createVarsContainer(ctx: ScopeContext, tsContainer: ContainerNod
     // it will mean that we should create scope object
     let shouldCreateScopeObject = false;
 
-    // find any reference that is outside of inner scopes
-    walkNodeTree(tsContainer, (node) => {
-        if (ts.isIdentifier(node)) {
-            const symbol = ctx.checker.getSymbolAtLocation(node);
+    if (!ts.isSourceFile(tsContainer)) {
+        // find any reference that is outside of inner scopes
+        walkNodeTree(tsContainer, (node) => {
+            if (ts.isIdentifier(node)) {
+                const symbol = ctx.checker.getSymbolAtLocation(node);
 
-            const isFuncSymbol = symbol?.valueDeclaration && ts.isFunctionDeclaration(symbol?.valueDeclaration);
-            if (isFuncSymbol) {
-                // skip function references, as it is passed globally
-                // ?? TODO: somehow detect if we pass it by FunctionObject
-                return;
-            }
-            if (!symbol?.valueDeclaration) {
-                return;
-            }
+                const isFuncSymbol = symbol?.valueDeclaration && ts.isFunctionDeclaration(symbol?.valueDeclaration);
+                if (isFuncSymbol) {
+                    // skip function references, as it is passed globally
+                    // ?? TODO: somehow detect if we pass it by FunctionObject
+                    return;
+                }
+                if (!symbol?.valueDeclaration) {
+                    return;
+                }
 
-            let declContainer: ContainerNode | undefined = undefined;
-            walkUp(symbol.valueDeclaration, (x) => {
-                if (isContainerNode(x)) {
-                    declContainer = x;
+                let declContainer: ContainerNode | undefined = undefined;
+                walkUp(symbol.valueDeclaration, (x) => {
+                    if (isContainerNode(x)) {
+                        declContainer = x;
+                        return StopSymbol;
+                    }
+                });
+
+                if (!declContainer) {
+                    throw new Error(`container node not found for ${node.getText()}`);
+                }
+
+                if (declContainer === tsContainer) {
+                    console.log("decl scope same", node.getText(), " \n", node.parent?.getText());
+                    return;
+                }
+
+                let declScopeIsParent = false;
+                walkUp(tsContainer, (x) => {
+                    if (x === declContainer) {
+                        declScopeIsParent = true;
+                        return StopSymbol;
+                    }
+                });
+
+                if (declScopeIsParent) {
+                    shouldCreateScopeObject = true;
                     return StopSymbol;
                 }
-            });
-
-            if (!declContainer) {
-                throw new Error(`container node not found for ${node.getText()}`);
             }
-
-            if (declContainer === tsContainer) {
-                console.log("decl scope same", node.getText(), " \n", node.parent?.getText());
-                return;
-            }
-
-            let declScopeIsParent = false;
-            walkUp(tsContainer, (x) => {
-                if (x === declContainer) {
-                    declScopeIsParent = true;
-                    return StopSymbol;
-                }
-            });
-
-            if (declScopeIsParent) {
-                shouldCreateScopeObject = true;
-                return StopSymbol;
-            }
-        }
-    });
-
+        });
+    }
     let varsContainer: IVarsContainer;
 
     if (shouldCreateScopeObject) {
@@ -172,8 +174,18 @@ function _setVarsContainer(node: ts.Node, vc: IVarsContainer) {
     (node as any)[VARS_CONTAINER_IN_NODE] = vc;
 }
 
-export function getVarsContainer(node: ts.Node): IVarsContainer | undefined {
-    return (node as any)[VARS_CONTAINER_IN_NODE];
+export function getVarsContainer(ctx: ScopeContext, node: ts.Node): IVarsContainer | undefined {
+    const x = (node as any)[VARS_CONTAINER_IN_NODE];
+    if (x) return x;
+
+    if (!isContainerNode(node)) {
+        console.error(node);
+        throw new Error(`failed create varscontainer for not container node`);
+    }
+
+    const y = createVarsContainer(ctx, node)!;
+    _setVarsContainer(node, y);
+    return y;
 }
 
 export function hasVarsContainer(node: ts.Node): boolean {
