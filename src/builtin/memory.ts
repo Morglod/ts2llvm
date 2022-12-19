@@ -1,10 +1,10 @@
 import llvm from "llvm-bindings";
-import { ScopeContext } from "../context";
+import { ModuleContext } from "../context";
 
-export function createMalloc(ctx: ScopeContext) {
+export function createMalloc(ctx: ModuleContext) {
     const mallocFuncType = llvm.FunctionType.get(
-        llvm.Type.getInt8PtrTy(ctx.llvmContext),
-        [llvm.Type.getInt32Ty(ctx.llvmContext)],
+        llvm.Type.getInt8PtrTy(ctx.programCtx.llvmContext),
+        [llvm.Type.getInt32Ty(ctx.programCtx.llvmContext)],
         false
     );
 
@@ -15,7 +15,6 @@ export function createMalloc(ctx: ScopeContext) {
         ctx.module
     );
 
-    ctx.setScopeValue(ScopeContext.GLOBAL_MALLOC_FUNC, func);
-
+    ctx.mallocFunc = func;
     return func;
 }

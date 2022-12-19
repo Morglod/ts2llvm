@@ -20,3 +20,13 @@ analyze functions, (pure / not pure)
 2 pass) generate code
 
 IR -> llvm IR
+
+///
+
+ctx.findVarContainer(node.getText())?.getVariablePtr(ctx, node.getText())
+
+to
+
+symbolAt(node).valueDeclaration.parent.getVariablePtr(ctx, node.getText())
+
+valueDeclaration.parent is ContainerNode

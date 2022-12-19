@@ -1,7 +1,8 @@
 import ts from "typescript";
 import llvm from "llvm-bindings";
-import { Types } from "./types";
-import { ModuleContainer, parseModuleContainers } from "./ts-utils/scopes";
+import { Types, ObjTypeDesc } from "./types";
+import { ContainerNode, parseModuleContainers } from "./ts-utils";
+import { getVarsContainer, IVarsContainer, ScopeObjectVarsContainer } from "./builder/vars";
 
 export class ProgramContext {
     constructor(
@@ -22,9 +23,13 @@ export class ModuleContext {
         this._containers = parseModuleContainers(sourceFileNode);
     }
 
-    readonly _containers: ModuleContainer[];
+    mallocFunc!: llvm.Value;
+    gcMarkReleaseFunc!: llvm.Value;
 
-    findContainerNode(node: ts.Node, searchScopeOfNode = true): ModuleContainer | null {
+    /** all module containers */
+    private readonly _containers: ContainerNode[];
+
+    findContainerNode(node: ts.Node, searchScopeOfNode = true): ContainerNode | null {
         if (this._containers.includes(node as any)) return node as any;
         if (searchScopeOfNode) {
             while (node.parent) {
@@ -36,8 +41,8 @@ export class ModuleContext {
     }
 }
 
-type ScopeProxy = {
-    scopeValueNotFound?: (ctx: ScopeContext, name: string | symbol) => llvm.Value | undefined;
+type ScopeHooks = {
+    varNotFound?: (ctx: ScopeContext, name: string | symbol) => IVarsContainer | undefined;
 };
 
 export class ScopeContext {
@@ -45,34 +50,20 @@ export class ScopeContext {
         public readonly moduleCtx: ModuleContext,
         public readonly module: llvm.Module,
         public readonly parentScope: ScopeContext | undefined,
-        private tsNode_: ts.Node | undefined
+        public readonly tsNode: ts.Node | undefined
     ) {
-        this._scopeContainer = (tsNode_ && this.moduleCtx.findContainerNode(tsNode_, true)) || undefined;
+        if (tsNode && this.getTsContainerNode()) {
+            this._vars = getVarsContainer(this.getTsContainerNode()!);
+        }
     }
 
-    private _scopeContainer: ModuleContainer | undefined = undefined;
-
-    get scopeContainer() {
-        return this._scopeContainer;
-    }
-
-    get tsNode() {
-        return this.tsNode_;
-    }
-
-    unsafe_setTsNode(node: ts.Node | undefined) {
-        this.tsNode_ = node;
-        this._scopeContainer = (node && this.moduleCtx.findContainerNode(node, true)) || undefined;
-    }
-
-    createChildScope(tsNode: ts.Node | undefined) {
-        return new ScopeContext(this.moduleCtx, this.module, this, tsNode);
+    createChildScope(params: { tsNode?: ts.Node } = {}) {
+        return new ScopeContext(this.moduleCtx, this.module, this, params.tsNode);
     }
 
     get llvmContext(): llvm.LLVMContext {
         return this.moduleCtx.programCtx.llvmContext;
     }
-
     get builder(): llvm.IRBuilder {
         return this.moduleCtx.programCtx.builder;
     }
@@ -86,63 +77,92 @@ export class ScopeContext {
         return this.moduleCtx.programCtx.types;
     }
 
+    // container node
+
+    private _tsContainerNode: ContainerNode | null | undefined = undefined;
+
+    getTsContainerNode(): ContainerNode | undefined {
+        if (this._tsContainerNode) return this._tsContainerNode;
+        if (this._tsContainerNode === null) return undefined;
+        this._tsContainerNode = (this.tsNode && this.moduleCtx.findContainerNode(this.tsNode, true)) || null;
+        return this._tsContainerNode || undefined;
+    }
+
+    // helpers
+
     const_int32(x: number) {
         return llvm.ConstantInt.get(llvm.Type.getInt32Ty(this.llvmContext), x);
     }
 
-    static GLOBAL_MALLOC_FUNC = Symbol("malloc_func");
-    static GLOBAL_GC_MARK_RELEASE = Symbol("gc_mark_release");
-
-    protected scopeValues: Record<string | symbol, llvm.Value | undefined> = {};
-    protected scopeTypes: Record<string | symbol, llvm.Type> = {};
-
-    scopeProxy: ScopeProxy | undefined = undefined;
-
-    setScopeValue(name: string | symbol, value: llvm.Value | undefined) {
-        this.scopeValues[name] = value;
+    null_i8ptr() {
+        return llvm.Constant.getNullValue(llvm.Type.getInt8PtrTy(this.llvmContext));
     }
 
-    findScopeValue(
+    // vars
+
+    _vars: IVarsContainer | undefined = undefined;
+
+    hooks: ScopeHooks | undefined = undefined;
+
+    findVarContainer(
         name: string | symbol,
-        params: { noRecursive?: boolean; noProxy?: boolean } = {}
-    ): llvm.Value | undefined {
-        const x = this.scopeValues[name];
-        if (x) return x;
-        if (!params.noProxy && this.scopeProxy && this.scopeProxy.scopeValueNotFound) {
-            const y = this.scopeProxy.scopeValueNotFound(this, name);
+        params: { noRecursive?: boolean; noHooks?: boolean } = {}
+    ): IVarsContainer | undefined {
+        const x = this._vars?.hasVariable(name);
+        if (x) return this._vars;
+        if (!params.noHooks && this.hooks && this.hooks.varNotFound) {
+            const y = this.hooks.varNotFound(this, name);
             if (y) return y;
         }
-        if (!params.noRecursive && this.parentScope) return this.parentScope.findScopeValue(name);
+        if (!params.noRecursive && this.parentScope) return this.parentScope.findVarContainer(name);
         return undefined;
     }
+
+    findTopScopeObjectVarsContainer(): ScopeObjectVarsContainer | undefined {
+        if (this._vars && this._vars instanceof ScopeObjectVarsContainer) return this._vars;
+        return this.parentScope?.findTopScopeObjectVarsContainer();
+    }
+
+    // scope types
+
+    protected scopeTypes: Record<string | symbol, llvm.Type> = {};
 
     setScopeType(name: string | symbol, value: llvm.Type) {
         this.scopeTypes[name] = value;
     }
 
-    findScopeType(name: string | symbol): llvm.Type | undefined {
+    findScopeType(name: string | symbol, params: { noRecursive?: boolean } = {}): llvm.Type | undefined {
         const x = this.scopeTypes[name];
         if (x) return x;
-        if (this.parentScope) return this.parentScope.findScopeType(name);
+        if (!params.noRecursive && this.parentScope) return this.parentScope.findScopeType(name);
         return undefined;
     }
 
-    countScopeValues(): number {
-        return Object.values(this.scopeValues).length;
+    // deferred code building
+    // use it to create destructors or some deferred functions
+
+    _deferred: ((ctx: ScopeContext) => void)[] | undefined = undefined;
+
+    deferred_push(cb: (ctx: ScopeContext) => void) {
+        if (!this._deferred) this._deferred = [];
+        this._deferred.push(cb);
     }
 
-    // deferred code
-
-    _deferredCodeBlockCode: ((ctx: ScopeContext) => void)[] = [];
-
-    pushDeferredCodeBlockCode(cb: (ctx: ScopeContext) => void) {
-        this._deferredCodeBlockCode.push(cb);
-    }
-
-    appendDefferedCodeBlock() {
-        for (const d of this._deferredCodeBlockCode) {
+    deferred_runAndClear() {
+        if (!this._deferred) return;
+        for (const d of this._deferred) {
             d(this);
         }
-        this._deferredCodeBlockCode = [];
+        this._deferred = undefined;
     }
+}
+
+export function findScopeContextByDeclarationId(ctx: ScopeContext, id: string) {
+    do {
+        if (ctx.getTsContainerNode()?.locals?.has(id as ts.__String)) {
+            return ctx;
+        }
+        ctx = ctx.parentScope!;
+    } while (!!ctx);
+    return undefined;
 }

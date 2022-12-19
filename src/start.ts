@@ -1,13 +1,20 @@
 import ts from "typescript";
 import llvm from "llvm-bindings";
 import { writeFileSync } from "fs";
-import { ProgramContext } from "./context";
+import { ModuleContext, ProgramContext, ScopeContext } from "./context";
 import { Types } from "./types";
 import { parseSourceFile } from "./builder/module";
-import { parseModuleContainers } from "./ts-utils/scopes";
+import { parseModuleContainers } from "./ts-utils";
+import { createVarsContainer } from "./builder/vars";
+import { createMalloc } from "./builtin/memory";
+import { createGcMarkRelease } from "./builtin/gc";
 
-function dojob(rootNames: string[], options: ts.CompilerOptions, host?: ts.CompilerHost) {
+async function dojob(rootNames: string[], options: ts.CompilerOptions, host?: ts.CompilerHost) {
     debugger;
+
+    // await new Promise<void>((r) => {
+    //     setTimeout(() => r(), 10000);
+    // });
 
     const program = ts.createProgram(rootNames, options, host);
     const checker = program.getTypeChecker();

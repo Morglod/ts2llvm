@@ -1,14 +1,14 @@
 import ts from "typescript";
 import llvm from "llvm-bindings";
-import { ScopeContext } from "../context";
-import { findTypeFromType } from "./types";
+import { ModuleContext, ScopeContext } from "../context";
+import { resolveTypeFromType } from "./types";
 
 export function createObjectType(
     ctx: ScopeContext,
     objectTypeName: string | symbol | undefined,
     fields_: {
         type: llvm.Type;
-        name: string;
+        name: string | symbol;
     }[]
 ) {
     const { typeId, typeMeta } = ctx.types.allocType();
@@ -17,7 +17,11 @@ export function createObjectType(
     const fields = [...fields_]
         // !! first sort, than calc structIndex !!
         .sort((a, b) => {
-            return a.name.localeCompare(b.name);
+            if (typeof a.name === "string" && typeof b.name === "string") {
+                return a.name.localeCompare(b.name);
+            }
+            if (typeof a === "symbol") return 1;
+            return -1;
         })
         .map((f, fi) => ({
             ...f,
@@ -45,7 +49,7 @@ export function createObjectType(
     const tPtrType = llvm.PointerType.get(t, 0);
 
     typeMeta.create = (ctx: ScopeContext) => {
-        const mallocFunc = ctx.findScopeValue(ScopeContext.GLOBAL_MALLOC_FUNC)!;
+        const mallocFunc = ctx.moduleCtx.mallocFunc;
         const allocMem = ctx.builder.CreateCall(mallocFunc as llvm.Function, [ctx.const_int32(typeSize)]);
         const allocObj = ctx.builder.CreateBitOrPointerCast(allocMem, tPtrType);
 
@@ -53,6 +57,8 @@ export function createObjectType(
 
         const refCounterFieldPtr = ctx.builder.CreateGEP(t, allocObj, [ctx.const_int32(0), ctx.const_int32(0)]);
         const typeIdPtr = ctx.builder.CreateGEP(t, allocObj, [ctx.const_int32(0), ctx.const_int32(1)]);
+
+        console.log(ctx.module.print());
 
         ctx.builder.CreateStore(ctx.const_int32(1), refCounterFieldPtr);
         ctx.builder.CreateStore(ctx.const_int32(typeId), typeIdPtr);
@@ -111,7 +117,7 @@ export function createObjectType(
 
         ctx.builder.SetInsertPoint(callReleaseBB);
         const objVoidPtr = ctx.builder.CreateBitOrPointerCast(obj, ctx.builder.getInt8PtrTy());
-        ctx.builder.CreateCall(ctx.findScopeValue(ScopeContext.GLOBAL_GC_MARK_RELEASE) as llvm.Function, [objVoidPtr]);
+        ctx.builder.CreateCall(ctx.moduleCtx.gcMarkReleaseFunc as llvm.Function, [objVoidPtr]);
         ctx.builder.CreateBr(thenBB);
 
         ctx.builder.SetInsertPoint(thenBB);
@@ -123,7 +129,7 @@ export function createObjectType(
 export function generateObjectTypeForTsType(ctx: ScopeContext, node: ts.Node, objType: ts.Type) {
     const fields = objType.getProperties().map((prop) => {
         const type = ctx.checker.getTypeOfSymbolAtLocation(prop, node);
-        const llvmType = findTypeFromType(ctx, type)!;
+        const llvmType = resolveTypeFromType(ctx, type)!;
 
         return {
             name: prop.escapedName.toString(),

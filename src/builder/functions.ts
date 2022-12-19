@@ -1,10 +1,13 @@
 import ts from "typescript";
 import llvm from "llvm-bindings";
-import { ScopeContext } from "../context";
+import { findScopeContextByDeclarationId, ScopeContext } from "../context";
 import { codeBlock } from "../builder/expressions";
-import { findTypeFromType, parseTypeNode } from "../builder/types";
+import { resolveTypeByName, resolveTypeFromType, parseTypeNode } from "../builder/types";
 import { createObjectType } from "./objects";
 import { Types } from "../types";
+import { mapSymbolsTable } from "../utils";
+import { ContainerNode, StopSymbol, walkUp } from "../ts-utils";
+import { getVarsContainer, hasVarsContainer, ScopeObjectVarsContainer } from "./vars";
 
 export function parseFunctionType(ctx: ScopeContext, node: ts.FunctionDeclaration | ts.ArrowFunction) {
     const returnType = parseTypeNode(ctx, node.type);
@@ -20,28 +23,32 @@ export function parseFunction(ctx: ScopeContext, node: ts.FunctionDeclaration | 
     const funcName = node.name?.getText() || "func_" + Math.random().toString().replace(".", "_");
     const { funcType, paramTypes } = parseFunctionType(ctx, node);
     if (node.body) {
-        const { func, funcScopeCtx, funcCallFrameScopeCtx } = createFunction(ctx, funcName, funcType, paramTypes);
+        const { func, funcScopeCtx } = createFunction(ctx, funcName, funcType, paramTypes, node.parent, node.body);
 
-        funcCallFrameScopeCtx.unsafe_setTsNode(node.parent);
-        funcScopeCtx.unsafe_setTsNode(node.body);
+        // we need to assign var before parsing code, coz otherwise no recursion possible
+        node.name && ctx.findVarContainer(node.name.getText())?.storeVariable(ctx, node.name.getText(), func);
+
+        for (let i = 0; i < paramTypes.length; ++i) {
+            const param = paramTypes[i];
+            funcScopeCtx
+                .findVarContainer(param.name, { noRecursive: true })
+                ?.storeVariable(ctx, param.name, func.getArg(i + 1));
+        }
 
         codeBlock(funcScopeCtx, node.body, funcName, func, () => {
-            funcScopeCtx.appendDefferedCodeBlock();
+            funcScopeCtx.deferred_runAndClear();
         });
 
-        let isPureFunc = funcCallFrameScopeCtx.countScopeValues() === 0;
-        let hasThisArg = !!funcCallFrameScopeCtx.findScopeValue("this", { noProxy: true, noRecursive: true });
-        if (funcCallFrameScopeCtx.countScopeValues() === 1 && hasThisArg) {
-            isPureFunc = true;
-        }
-
-        if (isPureFunc) {
+        if (!!ctx.builder.GetInsertBlock()) {
+            // create function object only if we are inside some code block
+            // (inside other function)
+            return createFunctionObject(ctx, funcName, undefined!, func, paramTypes);
+        } else {
             return func;
         }
-
-        return createFunctionObject(ctx, funcName, funcCallFrameScopeCtx, func, paramTypes);
     } else {
         const func = llvm.Function.Create(funcType, llvm.Function.LinkageTypes.ExternalLinkage, funcName, ctx.module);
+        node.name && ctx.findVarContainer(node.name.getText())?.storeVariable(ctx, node.name.getText(), func);
         return func;
     }
 }
@@ -63,9 +70,9 @@ export function parseFunctionTypeFromSignature(ctx: ScopeContext, node: ts.CallL
     const tsReturnType = signature.getReturnType();
     const tsArgs = signature.getParameters();
 
-    const returnType = findTypeFromType(ctx, tsReturnType);
+    const returnType = resolveTypeFromType(ctx, tsReturnType);
     const args = tsArgs.map((x) => ({
-        type: findTypeFromType(ctx, ctx.checker.getTypeOfSymbolAtLocation(x, node)),
+        type: resolveTypeFromType(ctx, ctx.checker.getTypeOfSymbolAtLocation(x, node)),
     }));
 
     const funcType = createFunctionType(ctx, returnType, args);
@@ -76,41 +83,53 @@ export function createFunction(
     ctx: ScopeContext,
     funcName: string | undefined,
     funcType: llvm.FunctionType,
-    args: { name: string; type: llvm.Type }[]
+    args: { name: string; type: llvm.Type }[],
+    callFrameScopeNode: ts.Node,
+    functionBodyScopeNode: ts.Node
 ) {
     const func = llvm.Function.Create(funcType, llvm.Function.LinkageTypes.ExternalLinkage, funcName, ctx.module);
     const callFrameObjArg = func.getArg(0);
 
-    // set variables here for callframe
-    const funcCallFrameScopeCtx = ctx.createChildScope(undefined);
-    funcCallFrameScopeCtx.scopeProxy = {
-        scopeValueNotFound: (ctx, name) => {
-            const foundParent = ctx.parentScope?.findScopeValue(name);
-            // pass functions as global
-            if (foundParent && foundParent instanceof llvm.Function) {
-                return foundParent;
-            }
+    const funcScopeCtx = ctx.createChildScope({ tsNode: functionBodyScopeNode });
+    funcScopeCtx.hooks = {
+        varNotFound: (ctx, name) => {
+            // const foundParent = ctx.parentScope?.findScopeValue(name);
+            // // pass functions as global
+            // if (foundParent && foundParent instanceof llvm.Function) {
+            //     return foundParent;
+            // }
 
-            // TODO: find type of scope object
-            const callFrameTypeId = ctx.types.findObjTypeId_byLLVMType(func.getType());
-            const callFrameObj = ctx.types.getByTypeId(callFrameTypeId!);
-            const { fieldPtr } = callFrameObj.getField(ctx, callFrameObjArg, name as string);
-            ctx.setScopeValue(name, fieldPtr);
-            return fieldPtr;
+            // const scope = findScopeContextByDeclarationId(ctx, name.toString());
+            // if (!scope) {
+            //     console.error(name);
+            //     throw new Error(`scope with declaration not found`);
+            // }
+            // if (!scope._scopeObject) {
+            //     console.error(name, scope);
+            //     throw new Error(`scope without scope object`);
+            // }
+
+            // // walk N times up _scopeObject.parent
+            // // same N times that we walk when searching for declarartion
+
+            // const callFrameObj = ctx.types.getByTypeId(scope._scopeObject.typeId);
+            // const { fieldPtr } = callFrameObj.getField(ctx, callFrameObjArg, name as string);
+            // ctx.setScopeValue(name, fieldPtr);
+            // return fieldPtr;
+
+            return undefined!;
         },
     };
-
-    const funcScopeCtx = funcCallFrameScopeCtx.createChildScope(undefined);
 
     const funcArgs = args.map((param, argi) => {
         const llvmArgIndex = argi + 1;
         // +1 because arg0 is callframe
         const funcArg = func.getArg(llvmArgIndex);
-        funcScopeCtx.setScopeValue(param.name, funcArg);
+        // funcScopeCtx.findVarContainer(param.name).setScopeValue(param.name, funcArg);
 
         const found = funcScopeCtx.types.findObjTypeId_byLLVMType(param.type);
         if (found) {
-            funcScopeCtx.pushDeferredCodeBlockCode((ctx) => {
+            funcScopeCtx.deferred_push((ctx) => {
                 const typeDesc = ctx.types.getByTypeId(found)!;
                 typeDesc.decRefCounter(ctx, funcArg);
             });
@@ -126,7 +145,6 @@ export function createFunction(
     return {
         funcType,
         func,
-        funcCallFrameScopeCtx,
         funcScopeCtx,
         funcArgs,
     };
@@ -138,13 +156,28 @@ export function callFunction(
     funcValue: llvm.Value,
     args: llvm.Value[]
 ) {
-    let func: llvm.Function;
+    // coz there are no other way to get arg types from llvm.FunctionType
+    const tempFuncForArgs = llvm.Function.Create(funcType, llvm.Function.LinkageTypes.PrivateLinkage);
+    let func: llvm.Value;
+    let scopeObject: llvm.Value | undefined = undefined;
 
     // resolve function pointer
     if (funcValue instanceof llvm.Function) {
         // its pure function
         func = funcValue;
     } else {
+        walkUp(ctx.tsNode!, (x) => {
+            const vc = getVarsContainer(x);
+            if (vc && vc instanceof ScopeObjectVarsContainer) {
+                scopeObject = vc.scopeObject;
+                return StopSymbol;
+            }
+        });
+
+        if (!scopeObject) {
+            throw new Error(`failed pick scope object for function call`);
+        }
+
         // check if funcValue is pointer to FUNC_OBJECT_TYPE
         const found = ctx.types.find_byName(Types.FUNC_OBJECT_TYPE);
         if (!found) {
@@ -160,17 +193,20 @@ export function callFunction(
         if (llvm.Type.isSameType(found.typeMeta.llvmType, valueType)) {
             // funcValue is FunctionObject
             const { fieldPtr } = found.typeMeta.getField(ctx, funcValue, "funcPtr");
-            func = ctx.builder.CreateBitOrPointerCast(fieldPtr, funcType) as llvm.Function;
+            const funcPtr = ctx.builder.CreateLoad(fieldPtr.getType().getPointerElementType(), fieldPtr, "funcPtr");
+            func = ctx.builder.CreateBitOrPointerCast(funcPtr, funcType, "funcPtrCasted");
         } else {
             console.error(valueType);
             throw new Error(`unknown callee type`);
         }
     }
 
+    const nullptr = ctx.null_i8ptr();
+
     const callArgs = [
         // call frame pointer
         // TODO: pass valid object here
-        llvm.Constant.getNullValue(ctx.builder.getInt8PtrTy()),
+        scopeObject || nullptr,
 
         // other args
         ...args.map((argExp, argi) => {
@@ -182,13 +218,23 @@ export function callFunction(
             // !! only cast structs !!
             const expType = argExp.getType();
             if (foundTypeId || (expType.isPointerTy() && expType.getPointerElementType().isStructTy())) {
-                argExp = ctx.builder.CreateBitOrPointerCast(argExp, func.getArg(argi + 1).getType(), `arg${argi}`);
+                argExp = ctx.builder.CreateBitOrPointerCast(
+                    argExp,
+                    tempFuncForArgs.getArg(argi + 1).getType(),
+                    `arg${argi}`
+                );
             }
             return argExp;
         }),
     ];
 
-    return ctx.builder.CreateCall(func, callArgs);
+    // tempFuncForArgs.removeFromParent();
+    // tempFuncForArgs.deleteValue();
+
+    if (callArgs[0] === nullptr) {
+        return ctx.builder.CreateCall(func as llvm.Function, callArgs);
+    }
+    return ctx.builder.CreateCall(funcType, func, callArgs);
 }
 
 /** should be one per module */
@@ -215,8 +261,38 @@ export function createFunctionObject(
 
     const funcObj = typeMeta.create(ctx);
     typeMeta.setField(ctx, funcObj, "funcPtr", func);
-    typeMeta.setField(ctx, funcObj, "scopeObjPtr", llvm.Constant.getNullValue(ctx.builder.getInt8PtrTy()));
-    typeMeta.setField(ctx, funcObj, "thisObjPtr", llvm.Constant.getNullValue(ctx.builder.getInt8PtrTy()));
+    typeMeta.setField(ctx, funcObj, "scopeObjPtr", ctx.null_i8ptr());
+    typeMeta.setField(ctx, funcObj, "thisObjPtr", ctx.null_i8ptr());
 
     return funcObj;
+}
+
+export function createCodeBlockScopeObject(
+    ctx: ScopeContext,
+    container: ContainerNode,
+    parentScopeObjectPtr: llvm.Value
+) {
+    const { typeId, typeMeta } = createObjectType(ctx, undefined, [
+        {
+            name: Types.CODEBLOCK_SCOPE_OBJECT_PARENT_FIELD,
+            type: parentScopeObjectPtr.getType(),
+        },
+        ...(container.locals
+            ? mapSymbolsTable<{ type: llvm.Type; name: string }>(container.locals, (symb, key) => {
+                  const tsType = ctx.checker.getTypeOfSymbolAtLocation(symb, symb.valueDeclaration!);
+                  const t = resolveTypeFromType(ctx, tsType);
+                  const typeName = ctx.checker.typeToString(tsType);
+                  if (!t) {
+                      console.error(symb);
+                      throw new Error(`failed find type by name ${typeName}`);
+                  }
+                  return {
+                      type: t,
+                      name: key.toString(),
+                  };
+              })
+            : []),
+    ]);
+
+    return { typeId, typeMeta };
 }

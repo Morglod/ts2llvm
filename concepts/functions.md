@@ -50,6 +50,7 @@ function foo() {
         a = 123
         boo = ObjFunction { %scopeObject, booFunc }
         boo2 = ObjFunction { %scopeObject, boo2Func }
+        parent = %parentScopeObject
     }
 }
 ```

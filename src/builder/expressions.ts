@@ -5,12 +5,14 @@ import { ObjTypeDesc } from "../types";
 import { parseDeclaration } from "./declarations";
 import {
     callFunction,
+    createCodeBlockScopeObject,
     createFunctionType,
     parseFunction,
     parseFunctionType,
     parseFunctionTypeFromSignature,
 } from "./functions";
 import { generateObjectTypeForTsType } from "./objects";
+import { ContainerNode } from "../ts-utils";
 
 export function codeBlock(
     ctx: ScopeContext,
@@ -19,7 +21,8 @@ export function codeBlock(
     parentFunc: llvm.Function | undefined,
     appendBlockBeforeReturn?: () => void
 ) {
-    ctx = ctx.createChildScope(node);
+    ctx = ctx.createChildScope({ tsNode: node });
+    createCodeBlockScopeObject(ctx, node as any as ContainerNode, ctx.null_i8ptr()); // TODO: move scope objects to specialized ScopeContexts
 
     const prevIp = ctx.builder.saveAndClearIP();
     {
@@ -49,7 +52,7 @@ export function codeBlock(
         }
     });
 
-    ctx.appendDefferedCodeBlock();
+    ctx.deferred_runAndClear();
     appendBlockBeforeReturn && appendBlockBeforeReturn();
     ctx.builder.CreateRetVoid();
 
@@ -66,13 +69,13 @@ export function rhsExpression(
     if (ts.isIdentifier(node)) {
         // TODO: undefined or null should be special type?
         if (node.getText() === "undefined") {
-            return llvm.Constant.getNullValue(ctx.builder.getInt8PtrTy());
+            return ctx.null_i8ptr();
         }
         if (node.getText() === "null") {
-            return llvm.Constant.getNullValue(ctx.builder.getInt8PtrTy());
+            return ctx.null_i8ptr();
         }
 
-        const found = ctx.findScopeValue(node.getText());
+        const found = ctx.findVarContainer(node.getText())?.loadVariable(ctx, node.getText());
         if (!found) {
             throw new Error(
                 `failed resolve rhsExpression; identifier '${node.getText()}' not found in scope\nparent:\n ${node.parent.getText()}`
@@ -111,12 +114,12 @@ export function rhsExpression(
     }
 
     if (ts.isPropertyAccessExpression(node)) {
-        const obj = ctx.findScopeValue(node.expression.getText())!;
         const fieldName = node.name.getText();
+        const objName = node.expression.getText();
+        const obj = ctx.findVarContainer(objName)?.loadVariable(ctx, objName)!;
         const tsType = ctx.checker.getTypeAtLocation(node.expression);
         const foundTypeId = ctx.types.findObjTypeId_byTsType(tsType)!;
         const { fieldPtr, fieldDesc } = ctx.types.getByTypeId(foundTypeId).getField(ctx, obj, fieldName);
-
         return ctx.builder.CreateLoad(fieldDesc.type, fieldPtr);
     }
 
@@ -146,7 +149,7 @@ export function rhsExpression(
             }
         }
 
-        ctx.pushDeferredCodeBlockCode((ctx) => {
+        ctx.deferred_push((ctx) => {
             typeDesc.decRefCounter(ctx, objValue);
         });
 
@@ -158,7 +161,7 @@ export function rhsExpression(
 
 export function lhsExpression(ctx: ScopeContext, node: ts.Expression): llvm.Value {
     if (ts.isIdentifier(node)) {
-        const found = ctx.findScopeValue(node.getText());
+        const found = ctx.findVarContainer(node.getText())?.getVariablePtr(ctx, node.getText());
         // TODO: pointer to this value
         if (!found) {
             throw new Error(`failed resolve lhsExpression; identifier '${node.getText()}' not found in scope`);
@@ -167,8 +170,9 @@ export function lhsExpression(ctx: ScopeContext, node: ts.Expression): llvm.Valu
     }
 
     if (ts.isPropertyAccessExpression(node)) {
-        const obj = ctx.findScopeValue(node.expression.getText())!;
         const fieldName = node.name.getText();
+        const objName = node.expression.getText();
+        const obj = ctx.findVarContainer(objName)?.loadVariable(ctx, objName)!;
         const tsType = ctx.checker.getTypeAtLocation(node.expression);
         const foundTypeId = ctx.types.findObjTypeId_byTsType(tsType)!;
         const { fieldPtr } = ctx.types.getByTypeId(foundTypeId).getField(ctx, obj, fieldName);

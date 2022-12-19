@@ -27,6 +27,15 @@ function -> pointer to struct {
     function pointer (arg0: call frame pointer, ...args)
 }
 
+call scope object -> struct {
+    ref counter
+    typeid
+
+    ... scope fields ...
+
+    parentScope = *call scope object
+}
+
 ```
 
 any type should be accessed with helper functions 'interface like'

@@ -32,6 +32,7 @@ export class Types {
     typeIdCounter = 1;
 
     static FUNC_OBJECT_TYPE = Symbol("FUNC_OBJECT_TYPE");
+    static CODEBLOCK_SCOPE_OBJECT_PARENT_FIELD = Symbol("FUNC_SCOPE_OBJECT_PARENT_FIELD");
 
     // typeId -> desc
     private objTypes: Record<number, ObjTypeDesc> = {};

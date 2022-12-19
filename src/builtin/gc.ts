@@ -1,10 +1,10 @@
 import llvm from "llvm-bindings";
-import { ScopeContext } from "../context";
+import { ModuleContext } from "../context";
 
-export function createGcMarkRelease(ctx: ScopeContext) {
+export function createGcMarkRelease(ctx: ModuleContext) {
     const funcType = llvm.FunctionType.get(
-        llvm.Type.getVoidTy(ctx.llvmContext),
-        [llvm.Type.getInt8PtrTy(ctx.llvmContext)],
+        llvm.Type.getVoidTy(ctx.programCtx.llvmContext),
+        [llvm.Type.getInt8PtrTy(ctx.programCtx.llvmContext)],
         false
     );
 
@@ -15,7 +15,6 @@ export function createGcMarkRelease(ctx: ScopeContext) {
         ctx.module
     );
 
-    ctx.setScopeValue(ScopeContext.GLOBAL_GC_MARK_RELEASE, func);
-
+    ctx.gcMarkReleaseFunc = func;
     return func;
 }

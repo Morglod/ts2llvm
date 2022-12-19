@@ -7,7 +7,6 @@ import { parseTypeNode } from "./types";
 export function parseDeclaration(ctx: ScopeContext, node: ts.Node) {
     if (ts.isFunctionDeclaration(node)) {
         const func = parseFunction(ctx, node);
-        node.name && ctx.setScopeValue(node.name.getText(), func);
         return func;
     }
 
@@ -39,7 +38,7 @@ export function parseDeclaration(ctx: ScopeContext, node: ts.Node) {
                     expr.setName(varName);
                 } catch {}
 
-                ctx.setScopeValue(varName, expr);
+                ctx.findVarContainer(varName)?.storeVariable(ctx, varName, expr);
                 return expr;
             } else {
                 throw new Error(`declaration without .initializer not yet supported`);
