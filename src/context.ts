@@ -118,9 +118,9 @@ export class ScopeContext {
         return undefined;
     }
 
-    findTopScopeObjectVarsContainer(): ScopeObjectVarsContainer | undefined {
+    findNearestScopeObjectVarsContainer(): ScopeObjectVarsContainer | undefined {
         if (this._vars && this._vars instanceof ScopeObjectVarsContainer) return this._vars;
-        return this.parentScope?.findTopScopeObjectVarsContainer();
+        return this.parentScope?.findNearestScopeObjectVarsContainer();
     }
 
     // scope types
