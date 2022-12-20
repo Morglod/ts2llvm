@@ -35,7 +35,7 @@ export function parseDeclaration(ctx: ScopeContext, node: ts.Node) {
 
                 const expr = rhsExpression(ctx, declNode.initializer, tsType);
                 try {
-                    expr.setName(varName);
+                    expr.getValueLLVM().setName(varName);
                 } catch {}
 
                 ctx.findVarContainer(varName)?.storeVariable(ctx, varName, expr);

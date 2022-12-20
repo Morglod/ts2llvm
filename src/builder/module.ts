@@ -18,8 +18,8 @@ export function parseSourceFile(ctx: ProgramContext, node: ts.SourceFile) {
     const moduleCtx = new ModuleContext(ctx, module, node);
     const scopeCtx = new ScopeContext(moduleCtx, module, undefined, node);
 
-    createMalloc(moduleCtx);
-    createGcMarkRelease(moduleCtx);
+    createMalloc(scopeCtx);
+    createGcMarkRelease(scopeCtx);
     createFunctionObjectType(scopeCtx);
 
     ts.forEachChild(node, (node) => {

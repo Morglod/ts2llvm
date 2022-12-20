@@ -1,5 +1,6 @@
 import ts from "typescript";
 import { ScopeContext } from "../context";
+import { AnyIRValue, IRObjectFieldPtr, IRObjectInstance, IRValue, IRValuePtr } from "../ir/value";
 import { ContainerNode, filterNodeTreeAsTree, isContainerNode, StopSymbol, walkNodeTree, walkUp } from "../ts-utils";
 import { ObjTypeDesc } from "../types";
 import { mapSymbolsTable } from "../utils";
@@ -7,16 +8,16 @@ import { createCodeBlockScopeObject } from "./functions";
 
 export interface IVarsContainer {
     hasVariable(name: string | symbol): boolean;
-    getVariablePtr(ctx: ScopeContext, name: string | symbol): llvm.Value | undefined;
-    loadVariable(ctx: ScopeContext, name: string | symbol): llvm.Value;
-    storeVariable(ctx: ScopeContext, name: string | symbol, newValue: llvm.Value): void;
+    getVariablePtr(ctx: ScopeContext, name: string | symbol): IRValuePtr | undefined;
+    loadVariable(ctx: ScopeContext, name: string | symbol): AnyIRValue;
+    storeVariable(ctx: ScopeContext, name: string | symbol, newValue: AnyIRValue): void;
 }
 
 export class DictVarsContainer implements IVarsContainer {
     vars: Record<
         string | symbol,
-        | { mutable: false; value: llvm.Value; symbol: ts.Symbol }
-        | { mutable: true; valuePtr: llvm.Value; symbol: ts.Symbol }
+        | { mutable: false; value: AnyIRValue; symbol: ts.Symbol }
+        | { mutable: true; valuePtr: IRValuePtr; symbol: ts.Symbol }
     > = {};
 
     constructor(vars: typeof DictVarsContainer.prototype.vars) {
@@ -27,52 +28,48 @@ export class DictVarsContainer implements IVarsContainer {
         return name in this.vars;
     }
 
-    getVariablePtr(ctx: ScopeContext, name: string | symbol): llvm.Value | undefined {
+    getVariablePtr(ctx: ScopeContext, name: string | symbol): IRValuePtr | undefined {
         const v = this.vars[name];
         if (v.mutable) return v.valuePtr;
         console.warn(`not var ptr for ${name.toString()}`);
         return undefined;
     }
 
-    loadVariable(ctx: ScopeContext, name: string | symbol): llvm.Value {
+    loadVariable(ctx: ScopeContext, name: string | symbol): AnyIRValue {
         const v = this.vars[name];
         if (!v.mutable) return v.value;
-        return ctx.builder.CreateLoad(v.valuePtr.getType().getPointerElementType(), v.valuePtr);
+        return v.valuePtr.createLoad(ctx);
     }
 
-    storeVariable(ctx: ScopeContext, name: string | symbol, newValue: llvm.Value): void {
+    storeVariable(ctx: ScopeContext, name: string | symbol, newValue: AnyIRValue): void {
         const v = this.vars[name];
         if (!v.mutable) {
             console.warn(`assign value to constant var; swapping by name`);
             this.vars[name] = { ...v, value: newValue };
             return;
         }
-        console.log("qqqq");
-        ctx.builder.CreateStore(newValue, v.valuePtr);
+
+        v.valuePtr.createStore(ctx, newValue);
     }
 }
 
 export class ScopeObjectVarsContainer implements IVarsContainer {
-    constructor(
-        public readonly scopeObject: llvm.Value,
-        public readonly scopeObjectDesc: { typeId: number; typeMeta: ObjTypeDesc }
-    ) {}
+    constructor(public readonly scopeObject: IRObjectInstance) {}
 
     hasVariable(name: string | symbol): boolean {
-        return !!this.scopeObjectDesc.typeMeta.fields.find((x) => x.name === name);
+        return this.scopeObject.hasVariable(name);
     }
 
-    getVariablePtr(ctx: ScopeContext, name: string | symbol): llvm.Value {
-        return this.scopeObjectDesc.typeMeta.getField(ctx, this.scopeObject, name).fieldPtr;
+    getVariablePtr(ctx: ScopeContext, name: string | symbol): IRObjectFieldPtr {
+        return this.scopeObject.createVariablePtr(ctx, name);
     }
 
-    loadVariable(ctx: ScopeContext, name: string | symbol): llvm.Value {
-        const ptr = this.scopeObjectDesc.typeMeta.getField(ctx, this.scopeObject, name).fieldPtr;
-        return ctx.builder.CreateLoad(ptr.getType().getPointerElementType(), ptr);
+    loadVariable(ctx: ScopeContext, name: string | symbol): AnyIRValue {
+        return this.scopeObject.loadVariable(ctx, name);
     }
 
-    storeVariable(ctx: ScopeContext, name: string | symbol, newValue: llvm.Value): void {
-        this.scopeObjectDesc.typeMeta.setField(ctx, this.scopeObject, name, newValue);
+    storeVariable(ctx: ScopeContext, name: string | symbol, newValue: AnyIRValue): void {
+        this.scopeObject.storeVariable(ctx, name, newValue);
     }
 }
 
@@ -145,7 +142,7 @@ export function createVarsContainer(ctx: ScopeContext, tsContainer: ContainerNod
     if (shouldCreateScopeObject) {
         const r = createCodeBlockScopeObject(ctx, tsContainer, ctx.null_i8ptr());
         const scopeObject = r.typeMeta.create(ctx);
-        varsContainer = new ScopeObjectVarsContainer(scopeObject, r);
+        varsContainer = new ScopeObjectVarsContainer(new IRObjectInstance(scopeObject, r.typeMeta));
         console.log("varsContainer", varsContainer);
     } else {
         const entires: [key: string, value: ConstructorParameters<typeof DictVarsContainer>[0][string]][] =

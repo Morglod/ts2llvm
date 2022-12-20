@@ -13,6 +13,8 @@ import {
 } from "./functions";
 import { generateObjectTypeForTsType } from "./objects";
 import { ContainerNode } from "../ts-utils";
+import { AnyIRValue, IRValue, IRValuePtr } from "../ir/value";
+import { IRFunc, resolveIRFunc } from "../ir";
 
 export function codeBlock(
     ctx: ScopeContext,
@@ -47,8 +49,7 @@ export function codeBlock(
             ) {
                 const property = lhsExpression(ctx, node.expression.left)!;
                 const value = rhsExpression(ctx, node.expression.right);
-                console.log("qqqq3");
-                ctx.builder.CreateStore(value, property);
+                ctx.builder.CreateStore(value.getValueLLVM(), property.getValueLLVM());
             }
         }
     });
@@ -66,14 +67,14 @@ export function rhsExpression(
     ctx: ScopeContext,
     node: ts.Expression,
     exprType: ts.Type | undefined = undefined
-): llvm.Value {
+): AnyIRValue {
     if (ts.isIdentifier(node)) {
         // TODO: undefined or null should be special type?
         if (node.getText() === "undefined") {
-            return ctx.null_i8ptr();
+            return IRValuePtr.null_i8ptr(ctx);
         }
         if (node.getText() === "null") {
-            return ctx.null_i8ptr();
+            return IRValuePtr.null_i8ptr(ctx);
         }
 
         const found = ctx.findVarContainer(node.getText())?.loadVariable(ctx, node.getText());
@@ -86,7 +87,7 @@ export function rhsExpression(
     }
 
     if (ts.isArrowFunction(node)) {
-        return parseFunction(ctx, node);
+        return resolveIRFunc(ctx, node);
     }
 
     if (ts.isCallExpression(node)) {
@@ -98,30 +99,31 @@ export function rhsExpression(
             return exp;
         });
 
-        return callFunction(ctx, funcType, callOf, args);
+        return IRFunc.createCall(ctx, funcType, callOf, args);
     }
 
     if (ts.isNumericLiteral(node)) {
         const num = +node.getText();
         const doubleTy = llvm.Type.getDoubleTy(ctx.llvmContext);
         const value = llvm.ConstantFP.get(doubleTy, num);
-        return value;
+        return new IRValue(value);
     }
 
     if (ts.isStringLiteral(node)) {
         const text = node.text;
         const value = ctx.builder.CreateGlobalStringPtr(text);
-        return value;
+        return new IRValue(value);
     }
 
     if (ts.isPropertyAccessExpression(node)) {
+        // TODO: move this code to IRObjectInstance
         const fieldName = node.name.getText();
         const objName = node.expression.getText();
         const obj = ctx.findVarContainer(objName)?.loadVariable(ctx, objName)!;
         const tsType = ctx.checker.getTypeAtLocation(node.expression);
         const foundTypeId = ctx.types.findObjTypeId_byTsType(tsType)!;
-        const { fieldPtr, fieldDesc } = ctx.types.getByTypeId(foundTypeId).getField(ctx, obj, fieldName);
-        return ctx.builder.CreateLoad(fieldDesc.type, fieldPtr);
+        const { fieldPtr, fieldDesc } = ctx.types.getByTypeId(foundTypeId).getField(ctx, obj.getValueLLVM(), fieldName);
+        return new IRValue(ctx.builder.CreateLoad(fieldDesc.type, fieldPtr));
     }
 
     if (ts.isObjectLiteralExpression(node)) {
@@ -143,7 +145,7 @@ export function rhsExpression(
         for (const initProp of node.properties) {
             if (ts.isPropertyAssignment(initProp)) {
                 const newFieldValue = rhsExpression(ctx, initProp.initializer);
-                typeDesc.setField(ctx, objValue, initProp.name.getText(), newFieldValue);
+                typeDesc.setField(ctx, objValue, initProp.name.getText(), newFieldValue.getValueLLVM());
             } else {
                 console.error("unsupported initProp");
                 console.error(initProp);
@@ -154,13 +156,13 @@ export function rhsExpression(
             typeDesc.decRefCounter(ctx, objValue);
         });
 
-        return objValue;
+        return new IRValue(objValue);
     }
 
     throw new Error(`failed resolve rhsExpression at:\n  ${node.getText()}\nfrom:\n  ${node.parent.getText()}\n`);
 }
 
-export function lhsExpression(ctx: ScopeContext, node: ts.Expression): llvm.Value {
+export function lhsExpression(ctx: ScopeContext, node: ts.Expression): AnyIRValue {
     if (ts.isIdentifier(node)) {
         const found = ctx.findVarContainer(node.getText())?.getVariablePtr(ctx, node.getText());
         // TODO: pointer to this value
@@ -171,13 +173,14 @@ export function lhsExpression(ctx: ScopeContext, node: ts.Expression): llvm.Valu
     }
 
     if (ts.isPropertyAccessExpression(node)) {
+        // TODO: move this code to IRObjectInstance
         const fieldName = node.name.getText();
         const objName = node.expression.getText();
         const obj = ctx.findVarContainer(objName)?.loadVariable(ctx, objName)!;
         const tsType = ctx.checker.getTypeAtLocation(node.expression);
         const foundTypeId = ctx.types.findObjTypeId_byTsType(tsType)!;
-        const { fieldPtr } = ctx.types.getByTypeId(foundTypeId).getField(ctx, obj, fieldName);
-        return fieldPtr;
+        const { fieldPtr } = ctx.types.getByTypeId(foundTypeId).getField(ctx, obj.getValueLLVM(), fieldName);
+        return new IRValue(fieldPtr);
     }
 
     return rhsExpression(ctx, node);

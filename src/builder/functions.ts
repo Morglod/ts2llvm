@@ -8,8 +8,10 @@ import { Types } from "../types";
 import { mapSymbolsTable } from "../utils";
 import { ContainerNode, StopSymbol, walkUp } from "../ts-utils";
 import { getVarsContainer, hasVarsContainer, ScopeObjectVarsContainer } from "./vars";
+import { IRObjectInstance, IRValue } from "../ir/value";
+import { IRFunc } from "../ir";
 
-export function parseFunctionType(ctx: ScopeContext, node: ts.FunctionDeclaration | ts.ArrowFunction) {
+export function parseFunctionType(ctx: ScopeContext, node: ts.FunctionLikeDeclaration) {
     const returnType = parseTypeNode(ctx, node.type);
     const paramTypes = node.parameters.map((param) => ({
         name: param.name.getText(),
@@ -19,37 +21,48 @@ export function parseFunctionType(ctx: ScopeContext, node: ts.FunctionDeclaratio
     return { funcType, returnType, paramTypes };
 }
 
-export function parseFunction(ctx: ScopeContext, node: ts.FunctionDeclaration | ts.ArrowFunction) {
+export function parseFunction(ctx: ScopeContext, node: ts.FunctionLikeDeclaration) {
     const funcName = node.name?.getText() || "func_" + Math.random().toString().replace(".", "_");
     const { funcType, paramTypes } = parseFunctionType(ctx, node);
     if (node.body) {
         const { func, funcScopeCtx } = createFunction(ctx, funcName, funcType, paramTypes, node.parent, node.body);
 
+        let irfunc: IRFunc;
+        if (!!ctx.builder.GetInsertBlock()) {
+            const { typeMeta: funcObjectTypeMeta, funcObj } = createFunctionObject(
+                ctx,
+                funcName,
+                // TODO: pass funcScopeCtx?
+                undefined!,
+                func,
+                paramTypes
+            );
+            irfunc = new IRFunc(funcName, func, funcType, funcObj, funcObjectTypeMeta, node, ctx, paramTypes);
+        } else {
+            irfunc = new IRFunc(funcName, func, funcType, undefined, undefined, node, ctx, paramTypes);
+        }
+
         // we need to assign var before parsing code, coz otherwise no recursion possible
-        node.name && ctx.findVarContainer(node.name.getText())?.storeVariable(ctx, node.name.getText(), func);
+        node.name && ctx.findVarContainer(node.name.getText())?.storeVariable(ctx, node.name.getText(), irfunc);
 
         for (let i = 0; i < paramTypes.length; ++i) {
             const param = paramTypes[i];
             funcScopeCtx
                 .findVarContainer(param.name, { noRecursive: true })
-                ?.storeVariable(ctx, param.name, func.getArg(i + 1));
+                ?.storeVariable(ctx, param.name, new IRValue(func.getArg(i + 1)));
         }
 
         codeBlock(funcScopeCtx, node.body, funcName, func, () => {
             funcScopeCtx.deferred_runAndClear();
         });
 
-        if (!!ctx.builder.GetInsertBlock()) {
-            // create function object only if we are inside some code block
-            // (inside other function)
-            return createFunctionObject(ctx, funcName, undefined!, func, paramTypes);
-        } else {
-            return func;
-        }
+        return irfunc;
     } else {
         const func = llvm.Function.Create(funcType, llvm.Function.LinkageTypes.ExternalLinkage, funcName, ctx.module);
-        node.name && ctx.findVarContainer(node.name.getText())?.storeVariable(ctx, node.name.getText(), func);
-        return func;
+        const irfunc = new IRFunc(funcName, func, funcType, undefined, undefined, node, ctx, paramTypes);
+        node.name && ctx.findVarContainer(node.name.getText())?.storeVariable(ctx, node.name.getText(), irfunc);
+
+        return irfunc;
     }
 }
 
@@ -159,7 +172,7 @@ export function callFunction(
     // coz there are no other way to get arg types from llvm.FunctionType
     const tempFuncForArgs = llvm.Function.Create(funcType, llvm.Function.LinkageTypes.PrivateLinkage);
     let func: llvm.Value;
-    let scopeObject: llvm.Value | undefined = undefined;
+    let scopeObject: IRObjectInstance | undefined = undefined;
 
     // resolve function pointer
     if (funcValue instanceof llvm.Function) {
@@ -267,7 +280,7 @@ export function createFunctionObject(
     typeMeta.setField(ctx, funcObj, "scopeObjPtr", ctx.null_i8ptr());
     typeMeta.setField(ctx, funcObj, "thisObjPtr", ctx.null_i8ptr());
 
-    return funcObj;
+    return { funcObj, typeMeta };
 }
 
 export function createCodeBlockScopeObject(

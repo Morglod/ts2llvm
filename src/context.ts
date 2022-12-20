@@ -3,6 +3,7 @@ import llvm from "llvm-bindings";
 import { Types, ObjTypeDesc } from "./types";
 import { ContainerNode, parseModuleContainers } from "./ts-utils";
 import { getVarsContainer, IVarsContainer, ScopeObjectVarsContainer } from "./builder/vars";
+import { IRFunc } from "./ir";
 
 export class ProgramContext {
     constructor(
@@ -23,8 +24,8 @@ export class ModuleContext {
         this._containers = parseModuleContainers(sourceFileNode);
     }
 
-    mallocFunc!: llvm.Value;
-    gcMarkReleaseFunc!: llvm.Value;
+    mallocFunc!: IRFunc;
+    gcMarkReleaseFunc!: IRFunc;
 
     /** all module containers */
     private readonly _containers: ContainerNode[];

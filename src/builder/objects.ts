@@ -51,7 +51,7 @@ export function createObjectType(
     typeMeta.create = (ctx: ScopeContext) => {
         const mallocFunc = ctx.moduleCtx.mallocFunc;
         const allocMem = ctx.builder.CreateCall(
-            mallocFunc as llvm.Function,
+            mallocFunc.func,
             [ctx.const_int32(typeSize)],
             objectTypeName?.toString() || ""
         );
@@ -125,7 +125,7 @@ export function createObjectType(
 
         ctx.builder.SetInsertPoint(callReleaseBB);
         const objVoidPtr = ctx.builder.CreateBitOrPointerCast(obj, ctx.builder.getInt8PtrTy());
-        ctx.builder.CreateCall(ctx.moduleCtx.gcMarkReleaseFunc as llvm.Function, [objVoidPtr]);
+        ctx.builder.CreateCall(ctx.moduleCtx.gcMarkReleaseFunc.func, [objVoidPtr]);
         ctx.builder.CreateBr(thenBB);
 
         ctx.builder.SetInsertPoint(thenBB);

@@ -9,6 +9,7 @@ export type ObjTypeFieldDesc = {
 };
 
 export type ObjTypeDesc = {
+    typeId: number;
     name: string | symbol | undefined;
     llvmType: llvm.Type;
     tsType: ts.Type | undefined;
