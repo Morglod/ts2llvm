@@ -1,31 +1,30 @@
 import ts from "typescript";
 import llvm from "llvm-bindings";
-import { Types, ObjTypeDesc } from "./types";
 import { ContainerNode, parseModuleContainers } from "./ts-utils";
-import { getVarsContainer, IVarsContainer, ScopeObjectVarsContainer } from "./builder/vars";
-import { IRFunc } from "./ir";
+import { analyzeVarContainers, getVarsContainer, IVarsContainer, ScopeObjectVarsContainer } from "./builder/vars";
+import { LLVMContext } from "./builtin/llvm-context";
+import { LLVMBuilder, LLVMModule } from "./ir/builder";
 
-export class ProgramContext {
+export class ProgramScope {
     constructor(
-        public readonly llvmContext: llvm.LLVMContext,
-        public readonly builder: llvm.IRBuilder,
+        public readonly llvmContext: LLVMContext,
         public readonly program: ts.Program,
-        public readonly checker: ts.TypeChecker,
-        public readonly types: Types
+        public readonly checker: ts.TypeChecker
     ) {}
 }
 
-export class ModuleContext {
+export class ModuleScope {
     constructor(
-        public readonly programCtx: ProgramContext,
-        public readonly module: llvm.Module,
+        public readonly programCtx: ProgramScope,
+        public readonly module: LLVMModule,
         sourceFileNode: ts.SourceFileLike
     ) {
+        this.builder = new LLVMBuilder(module);
         this._containers = parseModuleContainers(sourceFileNode);
+        analyzeVarContainers(programCtx.checker, this._containers);
     }
 
-    mallocFunc!: IRFunc;
-    gcMarkReleaseFunc!: IRFunc;
+    readonly builder: LLVMBuilder;
 
     /** all module containers */
     private readonly _containers: ContainerNode[];
@@ -43,85 +42,53 @@ export class ModuleContext {
 }
 
 type ScopeHooks = {
-    varNotFound?: (ctx: ScopeContext, name: string | symbol) => IVarsContainer | undefined;
+    varNotFound?: (ctx: DeclScope, name: string | symbol) => IVarsContainer | undefined;
 };
 
-export class ScopeContext {
+export class DeclScope {
     constructor(
-        public readonly moduleCtx: ModuleContext,
-        public readonly module: llvm.Module,
-        public readonly parentScope: ScopeContext | undefined,
+        public readonly moduleScope: ModuleScope,
+        public readonly parentScope: DeclScope | undefined,
         public readonly tsNode: ts.Node | undefined
     ) {
-        if (tsNode && this.getTsContainerNode()) {
-            this._vars = getVarsContainer(this, this.getTsContainerNode()!);
-        }
+        this.c = moduleScope.programCtx.llvmContext;
+        this.b = moduleScope.builder;
+        this.m = moduleScope.module;
     }
 
-    createChildScope(params: { tsNode?: ts.Node } = {}) {
-        return new ScopeContext(this.moduleCtx, this.module, this, params.tsNode);
+    unsafe_createChildScope(params: { tsNode?: ts.Node } = {}) {
+        const child = new DeclScope(this.moduleScope, this, params.tsNode);
+        return child;
     }
 
-    get llvmContext(): llvm.LLVMContext {
-        return this.moduleCtx.programCtx.llvmContext;
-    }
-    get builder(): llvm.IRBuilder {
-        return this.moduleCtx.programCtx.builder;
-    }
-    get program(): ts.Program {
-        return this.moduleCtx.programCtx.program;
+    c: LLVMContext;
+    b: LLVMBuilder;
+    m: LLVMModule;
+
+    get programTs(): ts.Program {
+        return this.moduleScope.programCtx.program;
     }
     get checker(): ts.TypeChecker {
-        return this.moduleCtx.programCtx.checker;
-    }
-    get types() {
-        return this.moduleCtx.programCtx.types;
+        return this.moduleScope.programCtx.checker;
     }
 
     // container node
 
     private _tsContainerNode: ContainerNode | null | undefined = undefined;
-
     getTsContainerNode(): ContainerNode | undefined {
         if (this._tsContainerNode) return this._tsContainerNode;
         if (this._tsContainerNode === null) return undefined;
-        this._tsContainerNode = (this.tsNode && this.moduleCtx.findContainerNode(this.tsNode, true)) || null;
+        this._tsContainerNode = (this.tsNode && this.moduleScope.findContainerNode(this.tsNode, true)) || null;
         return this._tsContainerNode || undefined;
-    }
-
-    // helpers
-
-    const_int32(x: number) {
-        return llvm.ConstantInt.get(llvm.Type.getInt32Ty(this.llvmContext), x);
-    }
-
-    null_i8ptr() {
-        return llvm.Constant.getNullValue(llvm.Type.getInt8PtrTy(this.llvmContext));
     }
 
     // vars
 
     _vars: IVarsContainer | undefined = undefined;
-
     hooks: ScopeHooks | undefined = undefined;
 
-    findVarContainer(
-        name: string | symbol,
-        params: { noRecursive?: boolean; noHooks?: boolean } = {}
-    ): IVarsContainer | undefined {
-        const x = this._vars?.hasVariable(name);
-        if (x) return this._vars;
-        if (!params.noHooks && this.hooks && this.hooks.varNotFound) {
-            const y = this.hooks.varNotFound(this, name);
-            if (y) return y;
-        }
-        if (!params.noRecursive && this.parentScope) return this.parentScope.findVarContainer(name);
-        return undefined;
-    }
-
-    findNearestScopeObjectVarsContainer(): ScopeObjectVarsContainer | undefined {
-        if (this._vars && this._vars instanceof ScopeObjectVarsContainer) return this._vars;
-        return this.parentScope?.findNearestScopeObjectVarsContainer();
+    createVarPtr(name: string | symbol) {
+        return this._vars!.createVarPtr(this, name)!;
     }
 
     // scope types
@@ -142,9 +109,15 @@ export class ScopeContext {
     // deferred code building
     // use it to create destructors or some deferred functions
 
-    _deferred: ((ctx: ScopeContext) => void)[] | undefined = undefined;
+    _firstCodeBlock: (() => void)[] = [];
+    firstCodeBlock_runAndClear() {
+        for (const d of this._firstCodeBlock) d();
+        this._firstCodeBlock = [];
+    }
 
-    deferred_push(cb: (ctx: ScopeContext) => void) {
+    _deferred: ((ctx: DeclScope) => void)[] | undefined = undefined;
+
+    deferred_push(cb: (ctx: DeclScope) => void) {
         if (!this._deferred) this._deferred = [];
         this._deferred.push(cb);
     }
@@ -158,7 +131,7 @@ export class ScopeContext {
     }
 }
 
-export function findScopeContextByDeclarationId(ctx: ScopeContext, id: string) {
+export function findScopeContextByDeclarationId(ctx: DeclScope, id: string) {
     do {
         if (ctx.getTsContainerNode()?.locals?.has(id as ts.__String)) {
             return ctx;

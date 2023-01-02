@@ -5,13 +5,21 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "type": "gdb",
+            "request": "launch",
+            "name": "run gdb",
+            "target": "./a.out",
+            "cwd": "${workspaceRoot}/example",
+            "valuesFormatting": "disabled"
+        },
+        {
             "type": "lldb",
             "request": "attach",
-            "name": "Attach",
+            "name": "Attach to process",
             "pid": "${command:pickMyProcess}" // use ${command:pickProcess} to pick other users' processes
         },
         {
-            "name": "Attach by Process ID",
+            "name": "Attach to node",
             "processId": "${command:PickProcess}",
             "request": "attach",
             "skipFiles": ["<node_internals>/**"],

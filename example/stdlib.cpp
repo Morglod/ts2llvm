@@ -18,6 +18,10 @@ void stdlib_log_number(void* _, double a) {
     printf("%f\n", a);
 }
 
+void* std_malloc(void* _, int size) {
+    return malloc(size);
+}
+
 void entry();
 
 int main(int _1, char** _2) {

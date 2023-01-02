@@ -11,3 +11,13 @@ export function mapSymbolsTable<T>(st: ts.SymbolTable, mapper: (symbol: ts.Symbo
     });
     return entries;
 }
+
+let _uuid = 1;
+export function nextUUID(prefix: string = "id") {
+    return `${prefix}${++_uuid}`;
+}
+
+export function nameToStr(name: string | symbol | undefined) {
+    if (!name) return nextUUID();
+    return typeof name === "string" ? name : nextUUID(name.description?.replaceAll(" ", "_"));
+}

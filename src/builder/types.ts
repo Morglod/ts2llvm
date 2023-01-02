@@ -1,11 +1,12 @@
 import ts from "typescript";
 import llvm from "llvm-bindings";
-import { ScopeContext } from "../context";
-import { createObjectType } from "./objects";
+import { DeclScope } from "../context";
 import { filterUndefined } from "../utils";
+import { MetaObjectRcType, MetaStructType } from "../llvm-meta-cache/obj";
+import { createStructTypeForMeta, pickStructNameTsType } from "../ir/builder";
 
-export function parseTypeNode(ctx: ScopeContext, node: ts.TypeNode | undefined, name: string | undefined = undefined) {
-    if (node === undefined) return ctx.builder.getVoidTy();
+export function parseTypeNode(ctx: DeclScope, node: ts.TypeNode | undefined, name: string | undefined = undefined) {
+    if (node === undefined) return ctx.c.voidTy;
 
     const typeName = node.getText();
 
@@ -22,58 +23,58 @@ export function parseTypeNode(ctx: ScopeContext, node: ts.TypeNode | undefined, 
     console.error(`cannot resolve llvm type from this; resolving as 'void':`);
     console.error(node.getText() + "\n");
 
-    return ctx.builder.getVoidTy();
+    return ctx.c.voidTy;
 }
 
-export function resolveTypeByName(ctx: ScopeContext, name: string): llvm.Type | undefined {
+export function resolveTypeByName(ctx: DeclScope, name: string): llvm.Type | undefined {
     if (name === "number") {
-        return ctx.builder.getDoubleTy();
+        return ctx.c.numberTy;
     }
     if (name === "void") {
-        return ctx.builder.getVoidTy();
+        return ctx.c.voidTy;
     }
     if (name === "string") {
-        return ctx.builder.getInt8PtrTy();
+        return ctx.c.i8ptrTy;
     }
     if (name === "i32") {
-        return ctx.builder.getInt32Ty();
+        return ctx.c.i32Ty;
     }
     if (name === "i8") {
-        return ctx.builder.getInt8Ty();
+        return ctx.c.i8Ty;
     }
     if (name === "i8ptr") {
-        return ctx.builder.getInt8PtrTy();
+        return ctx.c.i8ptrTy;
     }
     if (name === "never") {
         console.warn("something goes wrong if we trying to get type for 'never'");
-        return ctx.builder.getVoidTy();
+        return ctx.c.voidTy;
     }
     if (name === "boolean") {
-        return ctx.builder.getInt1Ty();
+        return ctx.c.booleanTy;
     }
     if (name === "undefined") {
         console.warn("'undefined' type not fully supported");
-        return ctx.builder.getInt8PtrTy();
+        return ctx.c.i8ptrTy;
     }
     if (name === "null") {
         console.warn("'null' type not fully supported");
-        return ctx.builder.getInt8PtrTy();
+        return ctx.c.i8ptrTy;
     }
     if (name === "any") {
         console.warn("'any' type not supported, resolving as 'void'");
-        return ctx.builder.getVoidTy();
+        return ctx.c.voidTy;
     }
 
     const found = ctx.findScopeType(name);
     if (found) {
-        if (found.isStructTy()) {
-            return llvm.PointerType.get(found, 0);
-        }
+        // if (found.isStructTy()) {
+        //     return llvm.PointerType.getUnqual(found);
+        // }
         return found;
     }
 }
 
-export function resolveTypeFromType(ctx: ScopeContext, type: ts.Type): llvm.Type {
+export function resolveTypeFromType(ctx: DeclScope, type: ts.Type): llvm.Type {
     const typeName = type.getSymbol()?.name || ctx.checker.typeToString(type);
     const found = resolveTypeByName(ctx, typeName);
     if (found) return found;
@@ -104,12 +105,21 @@ export function resolveTypeFromType(ctx: ScopeContext, type: ts.Type): llvm.Type
                 .filter(Boolean)
         );
 
-        const objt = createObjectType(ctx, typeName, fields);
-        objt.typeMeta.tsType = type;
+        const metaStruct = new MetaObjectRcType(ctx.c, pickStructNameTsType(type), fields);
+        const objt = createStructTypeForMeta(ctx.c, metaStruct);
 
-        ctx.setScopeType(typeName, objt.typeMeta.llvmType);
+        // TODO: assign objt to type[llvmTypeSymbol]
+        // type[llvmTypeSymbol] = objt;
 
-        return objt.typeMeta.llvmType;
+        ctx.setScopeType(typeName, objt);
+
+        return objt;
+    }
+
+    if (type.getCallSignatures().length !== 0) {
+        console.error(type);
+        throw new Error(`failed resolve function type`);
+        // return parseFunctionTypeFromSignature(ctx, type.getCallSignatures()[0]);
     }
 
     console.error(type);

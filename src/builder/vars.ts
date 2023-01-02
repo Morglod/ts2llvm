@@ -1,24 +1,53 @@
 import ts from "typescript";
-import { ScopeContext } from "../context";
-import { AnyIRValue, IRObjectFieldPtr, IRObjectInstance, IRValue, IRValuePtr } from "../ir/value";
-import { ContainerNode, filterNodeTreeAsTree, isContainerNode, StopSymbol, walkNodeTree, walkUp } from "../ts-utils";
-import { ObjTypeDesc } from "../types";
-import { mapSymbolsTable } from "../utils";
-import { createCodeBlockScopeObject } from "./functions";
+import llvm from "llvm-bindings";
+import { DeclScope } from "../context";
+import { MetaStructType } from "../llvm-meta-cache/obj";
+import {
+    ContainerNode,
+    filterNodeTreeAsTree,
+    isContainerNode,
+    isFunctionLikeDeclaration,
+    StopSymbol,
+    walkNodeTree,
+    walkUp,
+} from "../ts-utils";
+import { filterUndefined, mapSymbolsTable } from "../utils";
+import { createScopeObjectType } from "./functions";
+import { resolveTypeFromType } from "./types";
 
 export interface IVarsContainer {
     hasVariable(name: string | symbol): boolean;
-    getVariablePtr(ctx: ScopeContext, name: string | symbol): IRValuePtr | undefined;
-    loadVariable(ctx: ScopeContext, name: string | symbol): AnyIRValue;
-    storeVariable(ctx: ScopeContext, name: string | symbol, newValue: AnyIRValue): void;
+    getVariableType(name: string | symbol): llvm.Type;
+    createVarPtr(ctx: DeclScope, name: string | symbol): llvm.Value | undefined;
+    createLoadVar(ctx: DeclScope, name: string | symbol): llvm.Value;
+    createStoreToVar(ctx: DeclScope, name: string | symbol, newValue: llvm.Value): void;
+}
+
+export class ReferencedVarsContainer implements IVarsContainer {
+    constructor(public readonly accessor: () => IVarsContainer) {}
+
+    hasVariable(name: string | symbol): boolean {
+        return this.accessor().hasVariable(name);
+    }
+    getVariableType(name: string | symbol): llvm.Type {
+        return this.accessor().getVariableType(name);
+    }
+
+    createVarPtr(ctx: DeclScope, name: string | symbol): llvm.Value | undefined {
+        return this.accessor().createVarPtr(ctx, name);
+    }
+
+    createLoadVar(ctx: DeclScope, name: string | symbol): llvm.Value {
+        return this.accessor().createLoadVar(ctx, name);
+    }
+
+    createStoreToVar(ctx: DeclScope, name: string | symbol, newValue: llvm.Value): void {
+        return this.accessor().createStoreToVar(ctx, name, newValue);
+    }
 }
 
 export class DictVarsContainer implements IVarsContainer {
-    vars: Record<
-        string | symbol,
-        | { mutable: false; value: AnyIRValue; symbol: ts.Symbol }
-        | { mutable: true; valuePtr: IRValuePtr; symbol: ts.Symbol }
-    > = {};
+    vars: Record<string | symbol, { mutable: false; value: llvm.Value } | { mutable: true; valuePtr: llvm.Value }> = {};
 
     constructor(vars: typeof DictVarsContainer.prototype.vars) {
         this.vars = vars;
@@ -28,20 +57,21 @@ export class DictVarsContainer implements IVarsContainer {
         return name in this.vars;
     }
 
-    getVariablePtr(ctx: ScopeContext, name: string | symbol): IRValuePtr | undefined {
+    createVarPtr(ctx: DeclScope, name: string | symbol): llvm.Value | undefined {
         const v = this.vars[name];
         if (v.mutable) return v.valuePtr;
-        console.warn(`not var ptr for ${name.toString()}`);
-        return undefined;
+        console.warn("create varptr for not mutable");
+        return v.value;
+        // throw new Error(`not var ptr for ${name.toString()}`);
     }
 
-    loadVariable(ctx: ScopeContext, name: string | symbol): AnyIRValue {
+    createLoadVar(ctx: DeclScope, name: string | symbol): llvm.Value {
         const v = this.vars[name];
         if (!v.mutable) return v.value;
-        return v.valuePtr.createLoad(ctx);
+        return ctx.b.createLoad(v.valuePtr);
     }
 
-    storeVariable(ctx: ScopeContext, name: string | symbol, newValue: AnyIRValue): void {
+    createStoreToVar(ctx: DeclScope, name: string | symbol, newValue: llvm.Value): void {
         const v = this.vars[name];
         if (!v.mutable) {
             console.warn(`assign value to constant var; swapping by name`);
@@ -49,109 +79,127 @@ export class DictVarsContainer implements IVarsContainer {
             return;
         }
 
-        v.valuePtr.createStore(ctx, newValue);
+        ctx.b.createStore(v.valuePtr, newValue);
+    }
+
+    getVariableType(name: string | symbol): llvm.Type {
+        const v = this.vars[name];
+        if (v.mutable) {
+            return v.valuePtr.getType().getPointerElementType();
+        }
+        return v.value.getType();
     }
 }
 
 export class ScopeObjectVarsContainer implements IVarsContainer {
-    constructor(public readonly scopeObject: IRObjectInstance) {}
+    constructor(public readonly scopeObjectPtr: llvm.Value, public readonly scopeObjectMeta: MetaStructType) {}
 
     hasVariable(name: string | symbol): boolean {
-        return this.scopeObject.hasVariable(name);
+        return this.scopeObjectMeta.hasField(name);
     }
 
-    getVariablePtr(ctx: ScopeContext, name: string | symbol): IRObjectFieldPtr {
-        return this.scopeObject.createVariablePtr(ctx, name);
+    getVariableType(name: string | symbol): llvm.Type {
+        return this.scopeObjectMeta.getFieldOrThrow(name).type;
     }
 
-    loadVariable(ctx: ScopeContext, name: string | symbol): AnyIRValue {
-        return this.scopeObject.loadVariable(ctx, name);
+    createVarPtr(ctx: DeclScope, name: string | symbol): llvm.Value {
+        return ctx.b.createPointerToField(this.scopeObjectPtr, [name]);
     }
 
-    storeVariable(ctx: ScopeContext, name: string | symbol, newValue: AnyIRValue): void {
-        this.scopeObject.storeVariable(ctx, name, newValue);
+    createLoadVar(ctx: DeclScope, name: string | symbol): llvm.Value {
+        const fieldPtr = ctx.b.createPointerToField(this.scopeObjectPtr, [name]);
+        return ctx.b.createLoad(fieldPtr);
+    }
+
+    createStoreToVar(ctx: DeclScope, name: string | symbol, newValue: llvm.Value): void {
+        const fieldPtr = ctx.b.createPointerToField(this.scopeObjectPtr, [name]);
+        ctx.b.createStore(fieldPtr, newValue);
     }
 }
 
-export function createVarsContainer(ctx: ScopeContext, tsContainer: ContainerNode) {
-    const localSymbols =
-        (tsContainer.locals &&
-            mapSymbolsTable(tsContainer.locals, (s, k) => {
-                return { symbol: s, key: k };
-            })) ||
-        [];
+export class CombileVarsContainer implements IVarsContainer {
+    constructor(public readonly second: IVarsContainer, public readonly first: IVarsContainer) {}
 
-    if (localSymbols.length === 0) {
-        return undefined;
+    hasVariable(name: string | symbol): boolean {
+        return this.first.hasVariable(name) || this.second.hasVariable(name);
+    }
+    getVariableType(name: string | symbol): llvm.Type {
+        if (this.first.hasVariable(name)) return this.first.getVariableType(name);
+        if (this.second.hasVariable(name)) return this.second.getVariableType(name);
+        console.error(name);
+        throw new Error("no variable found");
     }
 
+    createVarPtr(ctx: DeclScope, name: string | symbol): llvm.Value | undefined {
+        if (this.first.hasVariable(name)) return this.first.createVarPtr(ctx, name);
+        if (this.second.hasVariable(name)) return this.second.createVarPtr(ctx, name);
+        console.error(name);
+        throw new Error("no variable found");
+    }
+
+    createLoadVar(ctx: DeclScope, name: string | symbol): llvm.Value {
+        if (this.first.hasVariable(name)) return this.first.createLoadVar(ctx, name);
+        if (this.second.hasVariable(name)) return this.second.createLoadVar(ctx, name);
+        console.error(name);
+        throw new Error("no variable found");
+    }
+
+    createStoreToVar(ctx: DeclScope, name: string | symbol, newValue: llvm.Value): void {
+        if (this.first.hasVariable(name)) return this.first.createStoreToVar(ctx, name, newValue);
+        if (this.second.hasVariable(name)) return this.second.createStoreToVar(ctx, name, newValue);
+        console.error(name);
+        throw new Error("no variable found");
+    }
+}
+
+export function createVarsContainer(
+    ctx: DeclScope,
+    tsContainer: ContainerNode,
+    shouldCreateScopeObject: boolean = false
+) {
     // check if any of var is referred in any non-root function body
     // it will mean that we should create scope object
-    let shouldCreateScopeObject = false;
 
-    if (!ts.isSourceFile(tsContainer)) {
-        // find any reference that is outside of inner scopes
-        walkNodeTree(tsContainer, (node) => {
-            if (ts.isIdentifier(node)) {
-                const symbol = ctx.checker.getSymbolAtLocation(node);
+    shouldCreateScopeObject = accessVarContainerAnalyze(tsContainer, true).shouldCreateScopeObject;
 
-                const isFuncSymbol = symbol?.valueDeclaration && ts.isFunctionDeclaration(symbol?.valueDeclaration);
-                if (isFuncSymbol) {
-                    // skip function references, as it is passed globally
-                    // ?? TODO: somehow detect if we pass it by FunctionObject
-                    return;
-                }
-                if (!symbol?.valueDeclaration) {
-                    return;
-                }
-
-                let declContainer: ContainerNode | undefined = undefined;
-                walkUp(symbol.valueDeclaration, (x) => {
-                    if (isContainerNode(x)) {
-                        declContainer = x;
-                        return StopSymbol;
-                    }
-                });
-
-                if (!declContainer) {
-                    throw new Error(`container node not found for ${node.getText()}`);
-                }
-
-                if (declContainer === tsContainer) {
-                    console.log("decl scope same", node.getText(), " \n", node.parent?.getText());
-                    return;
-                }
-
-                let declScopeIsParent = false;
-                walkUp(tsContainer, (x) => {
-                    if (x === declContainer) {
-                        declScopeIsParent = true;
-                        return StopSymbol;
-                    }
-                });
-
-                if (declScopeIsParent) {
-                    shouldCreateScopeObject = true;
-                    return StopSymbol;
-                }
-            }
-        });
-    }
-    let varsContainer: IVarsContainer;
+    let varsContainer: IVarsContainer = undefined!;
 
     if (shouldCreateScopeObject) {
-        const r = createCodeBlockScopeObject(ctx, tsContainer, ctx.null_i8ptr());
-        const scopeObject = r.typeMeta.create(ctx);
-        varsContainer = new ScopeObjectVarsContainer(new IRObjectInstance(scopeObject, r.typeMeta));
-        console.log("varsContainer", varsContainer);
+        if (varsContainer) return varsContainer;
+        // TODO: find parent scope type
+        const parentScopeMeta = undefined;
+        const { type: scopeType, meta } = createScopeObjectType(ctx, tsContainer, parentScopeMeta);
+        const objPtr = ctx.b.createHeapVariable(scopeType, "scopeObj");
+        varsContainer = new ScopeObjectVarsContainer(objPtr, meta);
+        return varsContainer;
     } else {
+        const localSymbols =
+            (tsContainer.locals &&
+                filterUndefined(
+                    mapSymbolsTable(tsContainer.locals, (s, k) => {
+                        if (s.valueDeclaration?.kind === ts.SyntaxKind.Parameter) {
+                            // filter out func arguments
+                            return undefined;
+                        }
+                        return {
+                            symbol: s,
+                            key: k,
+                            type: s.valueDeclaration && ctx.checker.getTypeOfSymbolAtLocation(s, s.valueDeclaration),
+                        };
+                    })
+                )) ||
+            [];
+
         const entires: [key: string, value: ConstructorParameters<typeof DictVarsContainer>[0][string]][] =
-            localSymbols.map(({ symbol, key }) => {
-                // TODO: if not const declaration
+            localSymbols.map(({ symbol, key, type }) => {
+                if (!type) {
+                    throw new Error("failed resolve var type");
+                }
+                const typeLLVM = resolveTypeFromType(ctx, type);
+                const varPtr = ctx.b.createStackVariable(typeLLVM, key.toString());
                 const varDesc = {
                     mutable: false,
-                    value: undefined!,
-                    symbol,
+                    value: varPtr,
                 } as const;
                 return [key.toString(), varDesc];
             });
@@ -171,20 +219,101 @@ function _setVarsContainer(node: ts.Node, vc: IVarsContainer) {
     (node as any)[VARS_CONTAINER_IN_NODE] = vc;
 }
 
-export function getVarsContainer(ctx: ScopeContext, node: ts.Node): IVarsContainer | undefined {
+export function getVarsContainer(node: ts.Node): IVarsContainer | undefined {
     const x = (node as any)[VARS_CONTAINER_IN_NODE];
     if (x) return x;
 
     if (!isContainerNode(node)) {
         console.error(node);
-        throw new Error(`failed create varscontainer for not container node`);
+        throw new Error(`failed resolve varscontainer for not container node`);
     }
-
-    const y = createVarsContainer(ctx, node)!;
-    _setVarsContainer(node, y);
-    return y;
+    throw new Error(`varscontainer not set on container node`);
 }
 
 export function hasVarsContainer(node: ts.Node): boolean {
     return !!(node as any)[VARS_CONTAINER_IN_NODE];
+}
+
+// --------
+
+export type VarContainerAnalyze = {
+    shouldCreateScopeObject: boolean;
+    parent: ContainerNode | undefined;
+    parentInfo: VarContainerAnalyze | undefined;
+};
+
+const _accessVarContainerAnalyzeSymbol = Symbol("accessVarContainerAnalyze");
+function accessVarContainerAnalyze(node: ContainerNode, throwIfNone = false): VarContainerAnalyze {
+    if (!(node as any)[_accessVarContainerAnalyzeSymbol]) {
+        if (throwIfNone) {
+            throw new Error("no container data found");
+        }
+        const defualtVCA: VarContainerAnalyze = {
+            shouldCreateScopeObject: false,
+            parent: undefined,
+            parentInfo: undefined,
+        };
+        (node as any)[_accessVarContainerAnalyzeSymbol] = defualtVCA;
+    }
+    return (node as any)[_accessVarContainerAnalyzeSymbol] as VarContainerAnalyze;
+}
+
+export function analyzeVarContainers(checker: ts.TypeChecker, moduleContainers: ContainerNode[]) {
+    // find parents
+    for (const mc of moduleContainers) {
+        walkUp(mc, (node) => {
+            if (isContainerNode(node)) {
+                const mcInfo = accessVarContainerAnalyze(mc);
+                mcInfo.parent = node;
+                mcInfo.parentInfo = accessVarContainerAnalyze(node);
+                mcInfo.shouldCreateScopeObject = !!mcInfo.parentInfo?.shouldCreateScopeObject;
+
+                return StopSymbol;
+            }
+        });
+    }
+
+    // sort roots to top
+    moduleContainers.sort((a, b) => {
+        if (accessVarContainerAnalyze(a).parent) return -1;
+        return 1;
+    });
+
+    // analyze
+    for (const mc of moduleContainers) {
+        const mcInfo = accessVarContainerAnalyze(mc);
+        let shouldCreateScopeObject = mcInfo.parentInfo?.shouldCreateScopeObject;
+
+        !shouldCreateScopeObject &&
+            walkNodeTree(mc, (node) => {
+                if (ts.isIdentifier(node)) {
+                    const symbol = checker.getSymbolAtLocation(node);
+
+                    const isFuncSymbol =
+                        symbol?.valueDeclaration && isFunctionLikeDeclaration(symbol?.valueDeclaration);
+                    if (isFuncSymbol) {
+                        // skip function references, as it is passed globally
+                        // ?? TODO: somehow detect if we pass it by FunctionObject
+                        return;
+                    }
+                    if (!symbol?.valueDeclaration) {
+                        return;
+                    }
+
+                    walkUp(node, (x) => {
+                        if (isFunctionLikeDeclaration(x) && isContainerNode(x)) {
+                            if (x !== mc) {
+                                shouldCreateScopeObject = true;
+                                return StopSymbol;
+                            }
+                        }
+                    });
+                    if (shouldCreateScopeObject) return StopSymbol;
+                }
+            });
+
+        if (shouldCreateScopeObject) {
+            mcInfo.shouldCreateScopeObject = shouldCreateScopeObject;
+        }
+    }
 }

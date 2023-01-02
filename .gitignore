@@ -1,5 +1,7 @@
 /node_modules
 /example/*.ll
 /example/*.out
+/example/*.out.dSYM
 /example/*.s
 .DS_Store
+/lvl2_ir_code_backup.zip

@@ -1,24 +1,15 @@
 import llvm from "llvm-bindings";
-import { ModuleContext, ScopeContext } from "../context";
-import { IRFunc } from "../ir";
+import { DictVarsContainer } from "../builder/vars";
+import { LLVMModule } from "../ir/builder";
+import { IRFuncValue } from "../ir/func";
 
-export function createMalloc(ctx: ScopeContext) {
-    const mallocFuncType = llvm.FunctionType.get(
-        llvm.Type.getInt8PtrTy(ctx.llvmContext),
-        [llvm.Type.getInt32Ty(ctx.llvmContext)],
-        false
-    );
+export function createMalloc(m: LLVMModule) {
+    const mallocFuncType = llvm.FunctionType.get(m.c.i8ptrTy, [m.c.i8ptrTy, m.c.i32Ty], false);
+    const func = llvm.Function.Create(mallocFuncType, llvm.Function.LinkageTypes.ExternalWeakLinkage, `std_malloc`, m);
 
-    const func = llvm.Function.Create(
-        mallocFuncType,
-        llvm.Function.LinkageTypes.ExternalWeakLinkage,
-        `malloc`,
-        ctx.module
-    );
-
-    ctx.moduleCtx.mallocFunc = new IRFunc("malloc", func, mallocFuncType, undefined, undefined, undefined!, ctx, [
-        { name: "_", type: llvm.Type.getInt8PtrTy(ctx.llvmContext) },
-        { name: "size", type: llvm.Type.getInt32Ty(ctx.llvmContext) },
+    const irfunc = new IRFuncValue("std_malloc", func, [], undefined, [
+        { name: "_", type: m.c.i8ptrTy },
+        { name: "size", type: m.c.i32Ty },
     ]);
-    return func;
+    return irfunc;
 }

@@ -1,6 +1,7 @@
 import ts from "typescript";
+import { analyzeVarContainers } from "../builder/vars";
 
-function hasNameIdentifier(node: ts.Node): node is ts.Node & { name: ts.Identifier } {
+export function hasNameIdentifier(node: ts.Node): node is ts.Node & { name: ts.Identifier } {
     if (
         "name" in node &&
         node.name &&
@@ -125,4 +126,16 @@ export function walkUp(node: ts.Node, walker: (node: ts.Node) => void | StopSymb
         if (walker(node) === StopSymbol) return;
         node = node.parent;
     }
+}
+
+export function isFunctionLikeDeclaration(node: ts.Node): node is ts.FunctionLikeDeclaration {
+    return (
+        ts.isArrowFunction(node) ||
+        ts.isFunctionExpression(node) ||
+        ts.isFunctionDeclaration(node) ||
+        ts.isMethodDeclaration(node) ||
+        ts.isGetAccessorDeclaration(node) ||
+        ts.isSetAccessorDeclaration(node) ||
+        ts.isConstructorDeclaration(node)
+    );
 }

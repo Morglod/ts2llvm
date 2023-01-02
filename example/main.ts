@@ -23,22 +23,28 @@ function letsgo(pos: Pos2) {
 }
 
 function entry() {
-    const pos2: Pos2 = { x: 123, y: 10 };
+    print_string("hello world from typescript!");
+    // const pos2: Pos2 = { x: 123, y: 10 };
 
-    function boo(pos: Pos2) {
-        print_string("boo called");
-        letsgo(pos2);
-    }
+    // function boo(pos: Pos2) {
+    //     print_string("boo called");
+    //     letsgo(pos2);
+    // }
 
     const pos: Pos2 = {
         x: 20,
         y: 40,
     };
-    boo(pos);
-    const smth = {
-        aaa: 123,
-    };
+    // boo(pos);
+    // const smth = {
+    //     aaa: 123,
+    // };
+
+    // pos.x = stdlib_sum(pos.x, pos.x);
+    // stdlib_log_number(pos.x);
+
     letsgo(pos);
+
     // boo(pos);
     // boo({
     //     y: 30,
