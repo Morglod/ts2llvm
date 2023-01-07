@@ -14,6 +14,7 @@ import {
 import { filterUndefined, mapSymbolsTable } from "../utils";
 import { createScopeObjectType } from "./functions";
 import { resolveTypeFromType } from "./types";
+import { debugTypeLLVM } from "../llvm-meta-cache/types-meta-cache";
 
 export interface IVarsContainer {
     hasVariable(name: string | symbol): boolean;
@@ -60,7 +61,7 @@ export class DictVarsContainer implements IVarsContainer {
     createVarPtr(ctx: DeclScope, name: string | symbol): llvm.Value | undefined {
         const v = this.vars[name];
         if (v.mutable) return v.valuePtr;
-        console.warn("create varptr for not mutable");
+        console.warn(`create varptr for not mutable "${name.toString()}"`);
         return v.value;
         // throw new Error(`not var ptr for ${name.toString()}`);
     }
@@ -85,7 +86,16 @@ export class DictVarsContainer implements IVarsContainer {
     getVariableType(name: string | symbol): llvm.Type {
         const v = this.vars[name];
         if (v.mutable) {
-            return v.valuePtr.getType().getPointerElementType();
+            try {
+                return v.valuePtr.getType().getPointerElementType();
+            } catch (err) {
+                console.error(`getPointerElementType failed for variable "${name.toString()}" marked as mutable`);
+                try {
+                    console.error(debugTypeLLVM(v.valuePtr.getType()));
+                } catch {}
+                console.error(err);
+                throw err;
+            }
         }
         return v.value.getType();
     }
@@ -198,8 +208,8 @@ export function createVarsContainer(
                 const typeLLVM = resolveTypeFromType(ctx, type);
                 const varPtr = ctx.b.createStackVariable(typeLLVM, key.toString());
                 const varDesc = {
-                    mutable: false,
-                    value: varPtr,
+                    mutable: true,
+                    valuePtr: varPtr,
                 } as const;
                 return [key.toString(), varDesc];
             });

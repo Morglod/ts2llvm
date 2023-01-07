@@ -6,7 +6,7 @@ import { createGcMarkRelease } from "../builtin/gc";
 import { LLVMContext } from "../builtin/llvm-context";
 import { createMalloc } from "../builtin/memory";
 import { DeclScope } from "../context";
-import { MetaObjectRcType, MetaStructType } from "../llvm-meta-cache/obj";
+import { MetaObjectRcType, MetaStructType, MetaStructType_Field } from "../llvm-meta-cache/obj";
 import {
     debugTypeLLVM,
     getTypeMeta,
@@ -67,9 +67,6 @@ export class LLVMBuilder {
     }
 
     createStackVariable(type: llvm.Type, name?: string) {
-        // TODO: looks wrong
-        console.log(debugTypeLLVM(type));
-        debugger;
         const v = this.b.CreateAlloca(type, null, "var_" + name);
         this.createInitVariable(type, v);
         return v;
@@ -129,22 +126,41 @@ export class LLVMBuilder {
             // deref objPtr pointer
             this.const_i32(0),
         ];
-        let lastFieldType!: llvm.Type;
 
         const objType = objPtr.getType().getPointerElementType();
-        const typeMeta = getTypeMetaExactOrThrow(objType, MetaStructType);
 
+        if (isPointerTy(objType)) {
+            console.error("failed createPointerToField of pointer struct type, deref first: ", debugTypeLLVM(objType));
+            throw new Error("smth goes wrong");
+        }
+        // try {
+        //     // objType is dereffed ahead here for 1 iteration
+        //     // so objPtr will be always ptr
+        //     while (objType.isPointerTy()) {
+        //         objPtr = this.createLoad(objPtr);
+        //         objType = objPtr.getType().getPointerElementType();
+        //     }
+        // } catch {}
+        const typeMeta = getTypeMetaExactOrThrow(objType, MetaStructType, "metaShouldExist");
+
+        let lastFieldType: llvm.Type | undefined;
         let nextObj: MetaStructType | undefined = typeMeta;
         for (const f of fieldsIdx) {
             if (!nextObj) {
                 throw new Error("smth goes wrong");
             }
-            const fieldMeta = nextObj.getField(f);
-            if (!fieldMeta) throw new Error("field not found");
+            const fieldMeta: MetaStructType_Field | undefined = nextObj.getField(f);
+            if (!fieldMeta) {
+                console.error(`not found field "${f.toString()}"`);
+                console.log("in object ", debugTypeLLVM(objType));
+                if (lastFieldType) console.log("in object's field ", debugTypeLLVM(lastFieldType));
+                debugger;
+                throw new Error(`field not found "${f.toString()}"`);
+            }
             idxs.push(this.const_i32(fieldMeta.structIndex));
             lastFieldType = fieldMeta.type;
 
-            // auto deref here
+            // TODO: auto deref value here ??
             let fieldType = fieldMeta.type;
             try {
                 while (fieldType.isPointerTy()) {
@@ -169,7 +185,9 @@ export class LLVMBuilder {
 
     createAddByPtr_const(valuePtr: llvm.Value, value: number) {
         const lhs = this.createLoad(valuePtr);
-        const rhsValue = this.const_iN(valuePtr.getType().getPointerElementType(), value);
+        const valuePtrTy = valuePtr.getType();
+        assertPtrLLVM(valuePtr, valuePtrTy);
+        const rhsValue = this.const_iN(valuePtrTy.getPointerElementType(), value);
         const resultLLVM = this.b.CreateAdd(lhs, rhsValue);
         this.createStore(valuePtr, resultLLVM);
         return resultLLVM;
@@ -184,7 +202,9 @@ export class LLVMBuilder {
 
     createSubByPtr_const(valuePtr: llvm.Value, value: number) {
         const lhs = this.createLoad(valuePtr);
-        const rhsValue = this.const_iN(valuePtr.getType().getPointerElementType(), value);
+        const valuePtrTy = valuePtr.getType();
+        assertPtrLLVM(valuePtr, valuePtrTy);
+        const rhsValue = this.const_iN(valuePtrTy.getPointerElementType(), value);
         const resultLLVM = this.b.CreateSub(lhs, rhsValue);
         this.b.CreateStore(resultLLVM, valuePtr);
         return resultLLVM;
@@ -244,7 +264,6 @@ export class LLVMBuilder {
     }
 
     createInitScope(scope: DeclScope, parentScopePtr: llvm.Value | undefined) {
-        debugger;
         const container = scope.getTsContainerNode();
         if (container && (!scope.parentScope?._vars || scope.parentScope?._vars instanceof ScopeObjectVarsContainer)) {
             const vars = (scope._vars = createVarsContainer(scope, container, !!parentScopePtr));
@@ -267,6 +286,7 @@ export class LLVMBuilder {
             }
         } catch (err) {
             console.error("failed restore ip");
+            debugger;
             console.error(err);
         }
     }
@@ -310,6 +330,7 @@ export function derefTypeLLVM(t: llvm.Type): llvm.Type {
     } catch (err) {
         console.warn("error while derefTypeLLVM:");
         console.warn(err);
+        console.warn(debugTypeLLVM(t));
     }
     return t;
 }
@@ -320,7 +341,6 @@ export function createStructTypeForMeta(c: LLVMContext, meta: MetaStructType) {
         meta.fields.map((x) => x.type),
         nameToStr(meta.name)
     );
-    debugger;
     setTypeMeta(t, meta);
     return t;
 }

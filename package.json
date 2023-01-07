@@ -6,11 +6,12 @@
   "scripts": {
     "postinstall": "ln -s ../packages/llvm-bindings ./node_modules/llvm-bindings",
     "start": "ts-node ./src/start.ts",
+    "build_bindings": "cd ./packages/llvm-bindings && npm run build:debug",
     "build_example": "ts-node ./src/start.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "morglod",
-  "license": "BSD",
+  "license": "MIT",
   "dependencies": {
     "@types/node": "^18.11.12",
     "llvm-bindings": "./packages/llvm-bindings",

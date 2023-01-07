@@ -1,6 +1,7 @@
 import ts from "typescript";
 import { DeclScope } from "../context";
 import { IRFuncValue } from "../ir/func";
+import { debugTypeLLVM } from "../llvm-meta-cache/types-meta-cache";
 import { rhsExpression } from "./expressions";
 import { parseFunction } from "./functions";
 import { parseTypeNode } from "./types";

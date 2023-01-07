@@ -6,8 +6,34 @@ import { createFunctionType, parseFunction, parseFunctionType, parseFunctionType
 import { ContainerNode, isContainerNode, isFunctionLikeDeclaration } from "../ts-utils";
 import { getIRFuncFromNode, IRFuncValue } from "../ir/func";
 import { getTypeMetaExact } from "../llvm-meta-cache/types-meta-cache";
-import { generateStructTypeForTsType } from "../ir/builder";
+import { generateStructTypeForTsType, isPointerTy, LLVMBuilder } from "../ir/builder";
 import { CombileVarsContainer, DictVarsContainer, IVarsContainer, ReferencedVarsContainer } from "./vars";
+
+function createFuncArgVars(
+    b: LLVMBuilder,
+    funcArgs: {
+        arg: llvm.Argument;
+        llvmArgIndex: number;
+        name: string;
+    }[]
+): DictVarsContainer {
+    const funcArgsContainer = new DictVarsContainer(
+        funcArgs.reduce((sum, x, xi) => {
+            let varPtr: llvm.Value = x.arg;
+            if (!isPointerTy(x.arg.getType())) {
+                varPtr = b.createStackVariable(x.arg.getType(), "arg" + xi);
+                b.createStore(varPtr, x.arg);
+            }
+
+            sum[x.name] = {
+                mutable: true,
+                valuePtr: varPtr,
+            };
+            return sum;
+        }, {} as ConstructorParameters<typeof DictVarsContainer>[0])
+    );
+    return funcArgsContainer;
+}
 
 // TODO: create different func for inner blocks
 export function funcBodyCodeBlock(
@@ -24,15 +50,7 @@ export function funcBodyCodeBlock(
     const bb = llvm.BasicBlock.Create(ctx.c, name, parentFunc?.funcLLVM);
     ctx.b.setInsertPoint(bb);
 
-    const funcArgsContainer = new DictVarsContainer(
-        parentFunc.funcArgs.reduce((sum, x) => {
-            sum[x.name] = {
-                mutable: true,
-                valuePtr: x.arg,
-            };
-            return sum;
-        }, {} as ConstructorParameters<typeof DictVarsContainer>[0])
-    );
+    const funcArgsContainer = createFuncArgVars(ctx.b, parentFunc.funcArgs);
 
     ctx.b.createInitScope(ctx, undefined);
     ctx._vars = new CombileVarsContainer(funcArgsContainer, ctx._vars!);

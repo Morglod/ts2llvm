@@ -21,8 +21,9 @@ export function getTypeMeta(t: llvm.Type, shouldExist: false | "metaShouldExist"
     // TODO: error smell if we pass pointer to searching type instead type
     t = derefTypeLLVM(t);
 
-    const m = typesMetaCache.cache.find((x) => llvm.Type.isSameType(x.type, t));
+    const m = typesMetaCache.cache.find((x) => llvm.Type.isExactType(x.type, t));
     if (!m && shouldExist) throw new Error("meta should exist for this type");
+
     return m?.meta;
 }
 
@@ -52,7 +53,6 @@ export function getTypeMetaExactOrThrow<T extends new (...args: any) => MetaEnti
 }
 
 export function setTypeMeta(t: llvm.Type, m: MetaEntity) {
-    debugger;
     typesMetaCache.cache.push({ type: t, meta: m });
 }
 
@@ -60,6 +60,10 @@ export function debugTypeLLVM(t: llvm.Type) {
     let dbgInfo = {} as any;
     dbgInfo.typeId = t.getTypeID();
     dbgInfo.type = t;
+
+    try {
+        if ("getName" in t && typeof t.getName === "function") dbgInfo.name = t.getName();
+    } catch {}
 
     let isStruct = false;
     try {

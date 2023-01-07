@@ -12,6 +12,11 @@ type Pos2 = {
     y: number;
 };
 
+type SmthTy = {
+    aaa: number;
+    bbb: number;
+};
+
 declare function stdlib_sum(a: number, b: number): number;
 declare function stdlib_log_number(a: number): void;
 
@@ -24,7 +29,7 @@ function letsgo(pos: Pos2) {
 
 function entry() {
     print_string("hello world from typescript!");
-    // const pos2: Pos2 = { x: 123, y: 10 };
+    const pos2: Pos2 = { x: 123, y: 10 };
 
     // function boo(pos: Pos2) {
     //     print_string("boo called");
@@ -32,13 +37,16 @@ function entry() {
     // }
 
     const pos: Pos2 = {
-        x: 20,
+        x: 30,
         y: 40,
     };
     // boo(pos);
-    // const smth = {
-    //     aaa: 123,
-    // };
+    const smth: SmthTy = {
+        aaa: 123,
+        bbb: stdlib_sum(pos.x, pos.y),
+    };
+
+    // smth.bbb = stdlib_sum(pos.x, pos.y);
 
     // pos.x = stdlib_sum(pos.x, pos.x);
     // stdlib_log_number(pos.x);
@@ -50,6 +58,8 @@ function entry() {
     //     y: 30,
     //     x: 40,
     // });
+
+    stdlib_log_number(smth.bbb);
 
     print_string("hello world from typescript!");
     print_string("hello 2!");

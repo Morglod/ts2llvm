@@ -27,6 +27,9 @@ export function parseTypeNode(ctx: DeclScope, node: ts.TypeNode | undefined, nam
 }
 
 export function resolveTypeByName(ctx: DeclScope, name: string): llvm.Type | undefined {
+    if (name === "__type") {
+        throw new Error('resolveTypeByName: could not resolve by name "__type"; handle this case in calling code');
+    }
     if (name === "number") {
         return ctx.c.numberTy;
     }
@@ -74,10 +77,22 @@ export function resolveTypeByName(ctx: DeclScope, name: string): llvm.Type | und
     }
 }
 
+const CACHED_TYPE = Symbol("cachedLLVMType");
+
 export function resolveTypeFromType(ctx: DeclScope, type: ts.Type): llvm.Type {
+    if ((type as any)[CACHED_TYPE]) {
+        return (type as any)[CACHED_TYPE];
+    }
+
     const typeName = type.getSymbol()?.name || ctx.checker.typeToString(type);
-    const found = resolveTypeByName(ctx, typeName);
-    if (found) return found;
+
+    if (typeName !== "__type") {
+        const found = resolveTypeByName(ctx, typeName);
+        if (found) {
+            (type as any)[CACHED_TYPE] = found;
+            return found;
+        }
+    }
 
     const props = type.getProperties();
     if (props.length) {
@@ -113,6 +128,7 @@ export function resolveTypeFromType(ctx: DeclScope, type: ts.Type): llvm.Type {
 
         ctx.setScopeType(typeName, objt);
 
+        (type as any)[CACHED_TYPE] = objt;
         return objt;
     }
 
