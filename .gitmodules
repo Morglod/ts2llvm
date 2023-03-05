@@ -1,0 +1,3 @@
+[submodule "packages/llvm-bindings"]
+	path = packages/llvm-bindings
+	url = https://github.com/Morglod/llvm-bindings.git
