@@ -17,6 +17,8 @@ export function parseSourceFile(ctx: ProgramScope, node: ts.SourceFile) {
         parseDeclaration(scopeCtx, node);
     });
 
+    module.entryPoint.finish(moduleCtx.builder);
+
     return {
         scopeCtx,
         module,

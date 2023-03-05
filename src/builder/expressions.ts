@@ -181,21 +181,7 @@ export function rhsExpression(
         const { type: structType, meta: structMeta } = generateStructTypeForTsType(ctx, node, tsType);
         const objValuePtr = ctx.b.createHeapVariable(structType, "expr");
 
-        for (const initProp of node.properties) {
-            if (ts.isPropertyAssignment(initProp)) {
-                const newFieldValue = rhsExpression(ctx, initProp.initializer);
-                const fieldPtr = ctx.b.createPointerToField(objValuePtr, [initProp.name.getText()]);
-                if (newFieldValue instanceof IRFuncValue) {
-                    // TODO
-                    throw new Error("qwe");
-                } else {
-                    ctx.b.createStore(fieldPtr, newFieldValue);
-                }
-            } else {
-                console.error("unsupported initProp");
-                console.error(initProp);
-            }
-        }
+        assignObjLiteralExpression(ctx, objValuePtr, node);
 
         ctx.deferred_push((ctx) => {
             // TODO: gc
@@ -228,4 +214,22 @@ export function lhsExpression(ctx: DeclScope, node: ts.Expression): llvm.Value |
     }
 
     return rhsExpression(ctx, node);
+}
+
+export function assignObjLiteralExpression(ctx: DeclScope, varPtr: llvm.Value, node: ts.ObjectLiteralExpression) {
+    for (const initProp of node.properties) {
+        if (ts.isPropertyAssignment(initProp)) {
+            const newFieldValue = rhsExpression(ctx, initProp.initializer);
+            const fieldPtr = ctx.b.createPointerToField(varPtr, [initProp.name.getText()]);
+            if (newFieldValue instanceof IRFuncValue) {
+                // TODO
+                throw new Error("qwe");
+            } else {
+                ctx.b.createStore(fieldPtr, newFieldValue);
+            }
+        } else {
+            console.error("unsupported initProp");
+            console.error(initProp);
+        }
+    }
 }

@@ -54,3 +54,40 @@ function foo() {
     }
 }
 ```
+
+##################
+
+```
+function forEach(arr, cb) {
+    for (let i = 0; i < arr.length; ++i) {
+        cb(arr[i], i);
+    }
+}
+
+function main() {
+    const arr1 = [1,2,3];
+
+    forEach(arr1, (x,i) => x + arr[i]);
+}
+```
+
+->
+
+```
+struct FuncAsArg_variant0 {
+    variant: 0 - pure func
+    funcPtr: (void* bf, ...args)
+    scopePtr: null
+}
+struct FuncAsArg_variant1 {
+    variant: 1 - lambda
+    funcPtr: (T* bf, ...args)
+    scopePtr: T*
+}
+
+function forEach(arr, cb: ) {
+    for (let i = 0; i < arr.length; ++i) {
+        cb(arr[i], i);
+    }
+}
+```

@@ -70,9 +70,6 @@ export function resolveTypeByName(ctx: DeclScope, name: string): llvm.Type | und
 
     const found = ctx.findScopeType(name);
     if (found) {
-        // if (found.isStructTy()) {
-        //     return llvm.PointerType.getUnqual(found);
-        // }
         return found;
     }
 }

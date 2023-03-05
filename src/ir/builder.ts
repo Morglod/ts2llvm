@@ -5,7 +5,7 @@ import { createVarsContainer, ReferencedVarsContainer, ScopeObjectVarsContainer 
 import { createGcMarkRelease } from "../builtin/gc";
 import { LLVMContext } from "../builtin/llvm-context";
 import { createMalloc } from "../builtin/memory";
-import { DeclScope } from "../context";
+import { DeclScope, ModuleEntryPoint } from "../context";
 import { MetaObjectRcType, MetaStructType, MetaStructType_Field } from "../llvm-meta-cache/obj";
 import {
     debugTypeLLVM,
@@ -25,6 +25,9 @@ export class LLVMModule extends llvm.Module {
         this.mallocFunc = createMalloc(this);
         this.gcMarkReleaseFunc = createGcMarkRelease(this);
     }
+
+    /** initialized after LLVMBuilder init */
+    entryPoint!: ModuleEntryPoint;
 
     mallocFunc: IRFuncValue;
     gcMarkReleaseFunc: IRFuncValue;

@@ -2,7 +2,7 @@ import ts from "typescript";
 import { DeclScope } from "../context";
 import { IRFuncValue } from "../ir/func";
 import { debugTypeLLVM } from "../llvm-meta-cache/types-meta-cache";
-import { rhsExpression } from "./expressions";
+import { assignObjLiteralExpression, rhsExpression } from "./expressions";
 import { parseFunction } from "./functions";
 import { parseTypeNode } from "./types";
 
@@ -38,22 +38,7 @@ export function parseDeclaration(ctx: DeclScope, node: ts.Node) {
 
                 if (ts.isObjectLiteralExpression(declNode.initializer)) {
                     const node = declNode.initializer;
-
-                    for (const initProp of node.properties) {
-                        if (ts.isPropertyAssignment(initProp)) {
-                            const newFieldValue = rhsExpression(ctx, initProp.initializer);
-                            const fieldPtr = ctx.b.createPointerToField(varPtr, [initProp.name.getText()]);
-                            if (newFieldValue instanceof IRFuncValue) {
-                                // TODO
-                                throw new Error("qwe");
-                            } else {
-                                ctx.b.createStore(fieldPtr, newFieldValue);
-                            }
-                        } else {
-                            console.error("unsupported initProp");
-                            console.error(initProp);
-                        }
-                    }
+                    assignObjLiteralExpression(ctx, varPtr, node);
                 } else {
                     const expr = rhsExpression(ctx, declNode.initializer, tsType);
                     if (expr instanceof IRFuncValue) {

@@ -13,6 +13,40 @@ export class ProgramScope {
     ) {}
 }
 
+export class ModuleEntryPoint {
+    constructor(readonly module: LLVMModule) {
+        const funcType = llvm.FunctionType.get(this.module.c.voidTy, [], false);
+        const func = (this.entryFunc = llvm.Function.Create(
+            funcType,
+            llvm.Function.LinkageTypes.ExternalLinkage,
+            `_module_entry_point_`,
+            this.module
+        ));
+        this.entryFuncBB = llvm.BasicBlock.Create(this.module.c, "entry", func);
+    }
+
+    protected entryFunc: llvm.Function;
+    protected entryFuncBB: llvm.BasicBlock;
+
+    appendEntryPoint(b: LLVMBuilder, func: () => void | llvm.BasicBlock) {
+        const ib = b.b.GetInsertBlock();
+        b.b.SetInsertPoint(this.entryFuncBB);
+
+        const r = func();
+        if (r !== undefined) {
+            this.entryFuncBB = r;
+        }
+
+        if (ib) b.b.SetInsertPoint(ib);
+    }
+
+    finish(b: LLVMBuilder) {
+        this.appendEntryPoint(b, () => {
+            b.createRetVoid();
+        });
+    }
+}
+
 export class ModuleScope {
     constructor(
         public readonly programCtx: ProgramScope,
@@ -22,6 +56,7 @@ export class ModuleScope {
         this.builder = new LLVMBuilder(module);
         this._containers = parseModuleContainers(sourceFileNode);
         analyzeVarContainers(programCtx.checker, this._containers);
+        this.module.entryPoint = new ModuleEntryPoint(module);
     }
 
     readonly builder: LLVMBuilder;
